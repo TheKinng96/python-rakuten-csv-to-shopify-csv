@@ -29,6 +29,7 @@ OPTION3_LINKED_TO: Final[str] = "Option3 Linked To"
 # Variant Details
 VARIANT_SKU: Final[str] = "Variant SKU"
 VARIANT_GRAMS: Final[str] = "Variant Grams"
+VARIANT_INVENTORY_QUANTITY: Final[str] = "Variant Inventory Quantity"
 VARIANT_INVENTORY_TRACKER: Final[str] = "Variant Inventory Tracker"
 VARIANT_INVENTORY_POLICY: Final[str] = "Variant Inventory Policy"
 VARIANT_FULFILLMENT_SERVICE: Final[str] = "Variant Fulfillment Service"
@@ -62,6 +63,9 @@ INCLUDED_JAPAN: Final[str] = "Included / Japan"
 
 # Price / Japan
 PRICE_JAPAN: Final[str] = "Price / Japan"
+
+# Collection
+COLLECTION: Final[str] = "Collection"
 
 class WeightUnit:
     GRAMS: Final[str] = "g"
