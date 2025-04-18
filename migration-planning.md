@@ -57,3 +57,45 @@ search for SKU管理番号 then group products, rules
 
 metafields process
 - add all to store maybe with matrixify?
+
+shopify csv rules
+- 
+
+## Shopify Variant Rules
+
+| Shopify Field | Rakuten Field | Rules/Notes |
+|---------------|---------------|-------------|
+| Option1 Name | バリエーション項目名定義 | Use the first variation option name |
+| Option1 Value | バリエーション項目キー定義 | Use the corresponding value for the first option |
+| Option2 Name | - | Leave empty (not used in example) |
+| Option2 Value | - | Leave empty (not used in example) |
+| Option3 Name | - | Leave empty (not used in example) |
+| Option3 Value | - | Leave empty (not used in example) |
+| SKU | SKU管理番号 | Use the SKU management number |
+| Grams | 商品属性（単品重量） | Extract from metafields, convert to grams |
+| Inventory Qty | 在庫数 | Use the inventory quantity |
+| Inventory Tracker | - | Set to "shopify" |
+| Inventory Policy | - | Set to "deny" |
+| Fulfillment Service | - | Set to "manual" |
+| Price | 販売価格 | Use the selling price |
+| Compare At Price | 表示価格 | Use the display price |
+| Requires Shipping | - | Set to "true" |
+| Taxable | - | Set to "true" |
+| Barcode | - | Leave empty |
+| Weight Unit | - | Set to "g" |
+| Tax Code | - | Leave empty |
+| Cost per item | - | Leave empty |
+| Status | - | Set to "active" |
+| Image Src | 商品画像タイプ{number}/商品画像パス{number} | Format: https://tshop.r10s.jp/tsutsu-uraura/{path} |
+| Image Position | - | Set to position number (1, 2, 3, etc.) |
+| Image Alt Text | 商品画像名(ALT) {number} | Use the ALT text with corresponding number |
+
+### Variant Grouping Rules
+- Group products by SKU管理番号
+- Keep common parts of product names when merging
+- Use SKU product name as key for merging
+- Remove common words when merging variants
+
+### Metafields Processing
+- Add all metafields to store (possibly with matrixify)
+- Include units in metafield values where applicable
