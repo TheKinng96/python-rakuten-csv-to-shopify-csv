@@ -1,7 +1,3 @@
 data.csv
 split_output/*
-rakuten-sample.csv
-rakuten-sample-without-html.csv
-shopify-sample.csv
-dl-item-cat202502131708-0-1.csv
-dl-item-cat202502131708-14-1.csv
+sample/*

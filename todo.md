@@ -31,6 +31,7 @@
 - [ ] Map product variants
 - [ ] Map product images
 - [ ] Map product metadata
+- [ ] use Matricify to create smart collections, need to extract a list of tags 
 
 ## 5. Testing
 - [ ] Create test data
