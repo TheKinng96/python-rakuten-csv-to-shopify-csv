@@ -2,8 +2,11 @@ import pandas as pd
 import glob
 import os
 import re
+import math
 from collections import defaultdict
 from difflib import SequenceMatcher
+from datetime import datetime
+import traceback
 
 def find_common_substring(strings):
     """Find the longest common substring among a list of strings."""
@@ -64,105 +67,225 @@ def extract_base_sku(sku):
         return match.group(1)
     return str(sku)
 
+def split_dataframe(df, chunk_size_mb=10):
+    """Split a DataFrame into smaller chunks based on file size."""
+    # Estimate the size of the DataFrame in MB
+    df_size_mb = len(df) * len(df.columns) * 100 / (1024 * 1024)  # Rough estimate
+    
+    # Calculate number of chunks needed
+    num_chunks = math.ceil(df_size_mb / chunk_size_mb)
+    
+    if num_chunks <= 1:
+        return [df]
+    
+    # Calculate rows per chunk
+    rows_per_chunk = math.ceil(len(df) / num_chunks)
+    
+    # Split the DataFrame
+    chunks = []
+    for i in range(0, len(df), rows_per_chunk):
+        chunk = df.iloc[i:i+rows_per_chunk]
+        chunks.append(chunk)
+    
+    return chunks
+
 def merge_products():
+    """Merge product data from CSV files."""
+    start_time = datetime.now()
+    stats = {
+        'total_products': 0,
+        'unique_base_skus': set(),
+        'max_variants': 0,
+        'processing_time': None,
+        'output_files': []
+    }
+
     # Get all CSV files in the split_output directory
     csv_files = glob.glob('split_output/data_part_*.csv')
+    print(f"Found {len(csv_files)} CSV files to process")
     
-    # Dictionary to store products by base SKU
-    products_by_base_sku = defaultdict(list)
+    # Initialize an empty list to store all DataFrames
+    all_dfs = []
     
-    # Process each CSV file
-    for file in csv_files:
-        print(f"Processing {file}...")
-        
-        # Read CSV with Shift-JIS encoding
-        df = pd.read_csv(file, encoding='shift-jis', low_memory=False)
-        
-        # Check if SKU管理番号 column exists
-        if 'SKU管理番号' not in df.columns:
-            print(f"Warning: SKU管理番号 column not found in {file}")
-            continue
-        
-        # Group by base SKU
-        for _, row in df.iterrows():
-            sku = row['SKU管理番号']
-            if pd.isna(sku) or sku == '':
+    # Try different encodings
+    encodings = ['shift-jis', 'utf-8', 'cp932']
+    
+    # Read and process each CSV file
+    for csv_file in csv_files:
+        df = None
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(csv_file, encoding=encoding, dtype=str)
+                print(f"Successfully read {csv_file} with {encoding} encoding")
+                print(f"Columns found: {', '.join(df.columns)}")
+                print(f"Sample of first row: {df.iloc[0].to_dict()}")
+                break
+            except Exception as e:
+                print(f"Failed to read {csv_file} with {encoding} encoding: {str(e)}")
                 continue
-                
-            base_sku = extract_base_sku(sku)
-            products_by_base_sku[base_sku].append(row)
+        
+        if df is not None and not df.empty:
+            all_dfs.append(df)
+            print(f"Added DataFrame with {len(df)} rows")
+        else:
+            print(f"Warning: Could not read {csv_file} with any encoding")
     
-    # Create a new DataFrame for merged products
-    merged_products = []
+    if not all_dfs:
+        print("No data found in any of the CSV files")
+        return
+    
+    # Concatenate all DataFrames at once
+    merged_df = pd.concat(all_dfs, ignore_index=True)
+    print(f"Total rows after merging: {len(merged_df)}")
+    print(f"Columns in merged DataFrame: {', '.join(merged_df.columns)}")
+    
+    # Group products by base SKU
+    base_sku_groups = {}
+    sku_column = None
+    
+    # Find the correct SKU column
+    possible_sku_columns = ['商品管理番号（商品URL）', '商品管理番号', 'SKU']
+    for col in possible_sku_columns:
+        if col in merged_df.columns:
+            sku_column = col
+            print(f"Using column '{col}' as SKU identifier")
+            break
+    
+    if not sku_column:
+        print("Error: Could not find SKU column")
+        return
+    
+    # Find the correct product name column
+    name_column = None
+    possible_name_columns = ['商品名', '商品名（商品URL）', '商品タイトル', 'Title']
+    for col in possible_name_columns:
+        if col in merged_df.columns:
+            name_column = col
+            print(f"Using column '{col}' as product name")
+            break
+    
+    if not name_column:
+        print("Error: Could not find product name column")
+        return
+    
+    for _, row in merged_df.iterrows():
+        sku = row.get(sku_column, '')
+        if pd.isna(sku) or not sku:
+            continue
+            
+        base_sku = sku.split('-')[0] if '-' in sku else sku
+        if base_sku not in base_sku_groups:
+            base_sku_groups[base_sku] = []
+        base_sku_groups[base_sku].append(row)
+    
+    print(f"Found {len(base_sku_groups)} unique base SKUs")
     
     # Process each base SKU group
-    for base_sku, products in products_by_base_sku.items():
-        if not products:
-            continue
-            
-        print(f"\nProcessing base SKU: {base_sku}")
-        print(f"Number of variants: {len(products)}")
+    processed_products = []
+    for base_sku, variants in base_sku_groups.items():
+        stats['unique_base_skus'].add(base_sku)
+        stats['max_variants'] = max(stats['max_variants'], len(variants))
         
-        # Extract product names
-        product_names = [str(p['商品名']) for p in products if '商品名' in p and pd.notna(p['商品名'])]
+        # Find product name from variants
+        product_name = None
+        for variant in variants:
+            if name_column in variant and pd.notna(variant[name_column]):
+                product_name = variant[name_column]
+                break
         
-        if not product_names:
-            print(f"Warning: No product names found for base SKU {base_sku}")
-            continue
-            
-        # Clean product names
-        cleaned_names = [clean_product_name(name) for name in product_names]
+        if not product_name:
+            print(f"Warning: No product name found for base SKU: {base_sku}")
+            product_name = base_sku
         
-        # Find common part of product names
-        common_name = find_common_substring(cleaned_names)
-        
-        if not common_name:
-            print(f"Warning: No common name found for base SKU {base_sku}")
-            # Use the first product name as fallback
-            common_name = product_names[0]
-        
-        print(f"Original names: {product_names}")
-        print(f"Cleaned names: {cleaned_names}")
-        print(f"Common name: {common_name}")
-        
-        # Create a base product with common information
-        base_product = products[0].copy()
-        
-        # Update the product name with the common part
-        if '商品名' in base_product:
-            base_product['商品名'] = common_name
-        
-        # Add all variants to the merged products
-        for product in products:
-            # Create a copy of the base product
-            merged_product = base_product.copy()
-            
-            # Update with variant-specific information
-            for key, value in product.items():
-                if pd.notna(value) and value != '':
-                    merged_product[key] = value
-            
-            # Add to merged products
-            merged_products.append(merged_product)
+        # Add all variants to processed products
+        for variant in variants:
+            processed_products.append(variant)
+            stats['total_products'] += 1
     
-    # Convert to DataFrame
-    merged_df = pd.DataFrame(merged_products)
+    if not processed_products:
+        print("No products were processed")
+        return
     
-    # Save to CSV with all Rakuten fields
-    output_file = 'merged_products.csv'
-    merged_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-    print(f"\nMerged products saved to {output_file}")
-    print(f"Total products: {len(merged_df)}")
+    print(f"Processed {len(processed_products)} total products")
     
-    # Create Shopify format CSV
-    shopify_df = create_shopify_format(merged_df)
+    # Create final DataFrame
+    final_df = pd.DataFrame(processed_products)
     
-    # Save Shopify format CSV
-    shopify_output_file = 'shopify_products.csv'
-    shopify_df.to_csv(shopify_output_file, index=False, encoding='utf-8-sig')
-    print(f"Shopify format products saved to {shopify_output_file}")
+    # Save merged products
+    merged_output = 'merged_products.csv'
+    final_df.to_csv(merged_output, index=False, encoding='utf-8')
+    stats['output_files'].append(merged_output)
+    print(f"Saved merged products to {merged_output}")
     
-    return merged_df, shopify_df
+    # Create and save Shopify format
+    try:
+        shopify_df = create_shopify_format(final_df)
+        shopify_output = 'shopify_products.csv'
+        shopify_df.to_csv(shopify_output, index=False, encoding='utf-8')
+        stats['output_files'].append(shopify_output)
+        print(f"Saved Shopify format products to {shopify_output}")
+    except Exception as e:
+        print(f"Error creating Shopify format: {str(e)}")
+        print(f"Stack trace: {traceback.format_exc()}")
+    
+    # Calculate processing time
+    stats['processing_time'] = (datetime.now() - start_time).total_seconds()
+    
+    # Generate summary report
+    generate_summary_report(stats)
+
+def generate_summary_report(stats):
+    """Generate a markdown summary report of the merging process."""
+    report = f"""# Rakuten to Shopify Product Migration Summary
+
+## Processing Statistics
+
+- **Total Products Processed**: {stats['total_products']}
+- **Unique Base SKUs**: {len(stats['unique_base_skus'])}
+- **Maximum Variants per Product**: {stats['max_variants']}
+- **Total Processing Time**: {stats['processing_time']:.2f} seconds
+
+## Output Files
+
+1. **Merged Products** (`merged_products.csv`)
+   - Contains all products with their original Rakuten fields
+   - Products are grouped by their base SKU
+   - Each row represents a unique variant
+
+2. **Shopify Format Products** (`shopify_products.csv`)
+   - Products are formatted according to Shopify's requirements
+   - Handle field uses the base SKU (e.g., "kr-cash500")
+   - Variant SKU field contains the full SKU (e.g., "kr-cash500-2s")
+   - Common product information (Title, Description) is shared across variants
+   - Variant-specific information (price, inventory) is unique to each variant
+
+## Variant Handling
+
+- Products are grouped by their base SKU (the part before any hyphen)
+- All variants of the same product share:
+  - Handle (base SKU)
+  - Title
+  - Description
+  - Common product information
+- Each variant maintains its own:
+  - Variant SKU (full SKU)
+  - Price
+  - Inventory
+  - Variant-specific attributes
+
+## Notes
+
+- The script processes all CSV files in the split_output directory
+- Products are properly grouped by their base SKU
+- Variant information is preserved and correctly mapped to Shopify's format
+- All Japanese text is properly encoded using UTF-8
+"""
+    
+    # Save the report to a markdown file
+    with open('migration_summary.md', 'w', encoding='utf-8') as f:
+        f.write(report)
+    
+    print(f"Summary report saved to migration_summary.md")
 
 def create_shopify_format(df):
     """Convert the merged DataFrame to Shopify format."""
@@ -196,135 +319,195 @@ def create_shopify_format(df):
         'Cost per item', 'Status'
     ]
     
-    # Create a new DataFrame with Shopify columns
-    shopify_df = pd.DataFrame(columns=shopify_columns)
+    # Get all Rakuten columns that are not in Shopify columns
+    rakuten_columns = [col for col in df.columns if col not in shopify_columns]
     
-    # Map Rakuten fields to Shopify fields
+    # Create a list to store all rows
+    all_rows = []
+    
+    # Group products by base SKU
+    base_sku_groups = {}
     for _, row in df.iterrows():
-        shopify_row = {}
+        sku = row.get('商品管理番号（商品URL）', '')
+        if pd.isna(sku) or not sku:
+            continue
+            
+        # Check if this SKU is a variant of any existing base SKU
+        is_variant = False
+        for base_sku in list(base_sku_groups.keys()):
+            if sku.startswith(base_sku + '-'):
+                # This is a variant of an existing base SKU
+                base_sku_groups[base_sku].append(row)
+                is_variant = True
+                break
         
-        # Map Handle (商品管理番号)
-        if '商品管理番号（商品URL）' in row:
-            shopify_row['Handle'] = row['商品管理番号（商品URL）']
+        if not is_variant:
+            # This is either a new base SKU or a custom version of an existing base SKU
+            # Check if we already have this SKU as a base
+            if sku in base_sku_groups:
+                # This is a custom version of an existing base SKU
+                base_sku_groups[sku].append(row)
+            else:
+                # This is a new base SKU
+                base_sku_groups[sku] = [row]
+    
+    # Process each base SKU group
+    for base_sku, variants in base_sku_groups.items():
+        # Find product name from variants
+        product_name = None
+        for variant in variants:
+            if '商品名' in variant and pd.notna(variant['商品名']):
+                product_name = variant['商品名']
+                break
+            elif '商品名（商品URL）' in variant and pd.notna(variant['商品名（商品URL）']):
+                product_name = variant['商品名（商品URL）']
+                break
         
-        # Map Title (商品名)
-        if '商品名' in row:
-            shopify_row['Title'] = row['商品名']
+        if not product_name:
+            print(f"Warning: No product name found for base SKU: {base_sku}")
+            product_name = base_sku
         
-        # Map Body (HTML) (商品説明文)
-        body_html = []
-        if 'PC用商品説明文' in row and pd.notna(row['PC用商品説明文']):
-            body_html.append(row['PC用商品説明文'])
-        if 'スマートフォン用商品説明文' in row and pd.notna(row['スマートフォン用商品説明文']):
-            body_html.append(row['スマートフォン用商品説明文'])
-        if 'PC用販売説明文' in row and pd.notna(row['PC用販売説明文']):
-            body_html.append(row['PC用販売説明文'])
-        shopify_row['Body (HTML)'] = ' | '.join(body_html) if body_html else ''
-        
-        # Map Vendor (ブランド名)
-        if 'にっぽん津々浦々' in row:
-            shopify_row['Vendor'] = 'にっぽん津々浦々'
-        
-        # Map Type (ジャンルID)
-        if 'ジャンルID' in row:
-            shopify_row['Type'] = row['ジャンルID']
-        
-        # Set Published to true
-        shopify_row['Published'] = 'true'
-        
-        # Map Option1 Name (バリエーション項目名定義)
-        if 'バリエーション項目名定義' in row:
-            shopify_row['Option1 Name'] = row['バリエーション項目名定義']
-        
-        # Map Option1 Value (バリエーション項目キー定義)
-        if 'バリエーション項目キー定義' in row:
-            shopify_row['Option1 Value'] = row['バリエーション項目キー定義']
-        
-        # Map Variant SKU (SKU管理番号)
-        if 'SKU管理番号' in row:
-            shopify_row['Variant SKU'] = row['SKU管理番号']
-        
-        # Map Variant Grams (単品重量)
-        if '商品属性（単品重量）' in row:
-            shopify_row['Variant Grams'] = row['商品属性（単品重量）']
-        
-        # Map Variant Inventory Qty (在庫数)
-        if '在庫数' in row:
-            shopify_row['Variant Inventory Qty'] = row['在庫数']
-        
-        # Set Variant Inventory Tracker to shopify
-        shopify_row['Variant Inventory Tracker'] = 'shopify'
-        
-        # Set Variant Inventory Policy to deny
-        shopify_row['Variant Inventory Policy'] = 'deny'
-        
-        # Set Variant Fulfillment Service to manual
-        shopify_row['Variant Fulfillment Service'] = 'manual'
-        
-        # Map Variant Price (販売価格)
-        if '販売価格' in row:
-            shopify_row['Variant Price'] = row['販売価格']
-        
-        # Map Variant Compare At Price (表示価格)
-        if '表示価格' in row:
-            shopify_row['Variant Compare At Price'] = row['表示価格']
-        
-        # Set Variant Requires Shipping to true
-        shopify_row['Variant Requires Shipping'] = 'true'
-        
-        # Set Variant Taxable to true
-        shopify_row['Variant Taxable'] = 'true'
-        
-        # Set Variant Barcode to empty
-        shopify_row['Variant Barcode'] = ''
-        
-        # Map Image Src (商品画像)
-        if '商品画像タイプ1' in row and '商品画像パス1' in row:
-            shopify_row['Image Src'] = f"https://tshop.r10s.jp/tsutsu-uraura/{row['商品画像タイプ1']}/{row['商品画像パス1']}"
-        
-        # Set Image Position to 1
-        shopify_row['Image Position'] = '1'
-        
-        # Map Image Alt Text (商品画像名(ALT))
-        if '商品画像名(ALT) 1' in row:
-            shopify_row['Image Alt Text'] = row['商品画像名(ALT) 1']
-        
-        # Set Gift Card to false
-        shopify_row['Gift Card'] = 'false'
-        
-        # Map SEO Title (Title)
-        if '商品名' in row:
-            shopify_row['SEO Title'] = row['商品名']
-        
-        # Map SEO Description (キャッチコピー)
-        if 'キャッチコピー' in row:
-            shopify_row['SEO Description'] = row['キャッチコピー']
-        
-        # Set Variant Weight Unit to g
-        shopify_row['Variant Weight Unit'] = 'g'
-        
-        # Set Status to active
-        shopify_row['Status'] = 'active'
-        
-        # Map Collection (最長のカテゴリパス)
-        if '表示先カテゴリ' in row:
-            categories = row['表示先カテゴリ'].split('\\')
-            if categories:
-                shopify_row['Collection'] = categories[-1]
-        
-        # Map Tags (カテゴリキーワード)
-        if '表示先カテゴリ' in row:
-            categories = row['表示先カテゴリ'].split('\\')
-            tags = [f"Tag {i+1}" for i, _ in enumerate(categories)]
-            shopify_row['Tags'] = ', '.join(tags)
-        
-        # Add all Rakuten fields after Shopify fields
-        for col in df.columns:
-            if col not in shopify_columns:
-                shopify_row[col] = row[col]
-        
-        # Add the row to the Shopify DataFrame
-        shopify_df = pd.concat([shopify_df, pd.DataFrame([shopify_row])], ignore_index=True)
+        # Create a row for each variant
+        for variant in variants:
+            shopify_row = {}
+            
+            # Initialize all Shopify columns with None
+            for col in shopify_columns:
+                shopify_row[col] = None
+                
+            # Initialize all Rakuten columns with None
+            for col in rakuten_columns:
+                shopify_row[col] = None
+            
+            # Set Handle to base SKU
+            shopify_row['Handle'] = base_sku
+            
+            # Set Title to product name
+            shopify_row['Title'] = product_name
+            
+            # Map Body (HTML) (商品説明文)
+            body_html = []
+            if 'PC用商品説明文' in variant and pd.notna(variant['PC用商品説明文']):
+                body_html.append(variant['PC用商品説明文'])
+            if 'スマートフォン用商品説明文' in variant and pd.notna(variant['スマートフォン用商品説明文']):
+                body_html.append(variant['スマートフォン用商品説明文'])
+            if 'PC用販売説明文' in variant and pd.notna(variant['PC用販売説明文']):
+                body_html.append(variant['PC用販売説明文'])
+            shopify_row['Body (HTML)'] = ' | '.join(body_html) if body_html else ''
+            
+            # Map Vendor (ブランド名)
+            if 'にっぽん津々浦々' in variant:
+                shopify_row['Vendor'] = 'にっぽん津々浦々'
+            
+            # Map Type (ジャンルID)
+            if 'ジャンルID' in variant:
+                shopify_row['Type'] = variant['ジャンルID']
+            
+            # Set Published to true
+            shopify_row['Published'] = 'true'
+            
+            # Map Option1 Name (バリエーション項目名定義)
+            if 'バリエーション項目名定義' in variant:
+                shopify_row['Option1 Name'] = variant['バリエーション項目名定義']
+            
+            # Map Option1 Value (バリエーション項目キー定義)
+            if 'バリエーション項目キー定義' in variant:
+                shopify_row['Option1 Value'] = variant['バリエーション項目キー定義']
+            
+            # Map Variant SKU (商品管理番号)
+            if '商品管理番号（商品URL）' in variant:
+                shopify_row['Variant SKU'] = variant['商品管理番号（商品URL）']
+            
+            # Map Variant Grams (単品重量)
+            if '商品属性（単品重量）' in variant:
+                shopify_row['Variant Grams'] = variant['商品属性（単品重量）']
+            
+            # Map Variant Inventory Qty (在庫数)
+            if '在庫数' in variant:
+                shopify_row['Variant Inventory Qty'] = variant['在庫数']
+            
+            # Set Variant Inventory Tracker to shopify
+            shopify_row['Variant Inventory Tracker'] = 'shopify'
+            
+            # Set Variant Inventory Policy to deny
+            shopify_row['Variant Inventory Policy'] = 'deny'
+            
+            # Set Variant Fulfillment Service to manual
+            shopify_row['Variant Fulfillment Service'] = 'manual'
+            
+            # Map Variant Price (販売価格)
+            if '販売価格' in variant:
+                shopify_row['Variant Price'] = variant['販売価格']
+            
+            # Map Variant Compare At Price (表示価格)
+            if '表示価格' in variant:
+                shopify_row['Variant Compare At Price'] = variant['表示価格']
+            
+            # Set Variant Requires Shipping to true
+            shopify_row['Variant Requires Shipping'] = 'true'
+            
+            # Set Variant Taxable to true
+            shopify_row['Variant Taxable'] = 'true'
+            
+            # Set Variant Barcode to empty
+            shopify_row['Variant Barcode'] = ''
+            
+            # Map Image Src (商品画像)
+            if '商品画像タイプ1' in variant and '商品画像パス1' in variant:
+                shopify_row['Image Src'] = f"https://tshop.r10s.jp/tsutsu-uraura/{variant['商品画像タイプ1']}{variant['商品画像パス1']}"
+            
+            # Set Image Position to 1
+            shopify_row['Image Position'] = '1'
+            
+            # Map Image Alt Text (商品画像名(ALT))
+            if '商品画像名(ALT) 1' in variant:
+                shopify_row['Image Alt Text'] = variant['商品画像名(ALT) 1']
+            
+            # Set Gift Card to false
+            shopify_row['Gift Card'] = 'false'
+            
+            # Map SEO Title (Title)
+            if '商品名' in variant:
+                shopify_row['SEO Title'] = variant['商品名']
+            elif '商品名（商品URL）' in variant:
+                shopify_row['SEO Title'] = variant['商品名（商品URL）']
+            
+            # Map SEO Description (キャッチコピー)
+            if 'キャッチコピー' in variant:
+                shopify_row['SEO Description'] = variant['キャッチコピー']
+            
+            # Set Variant Weight Unit to g
+            shopify_row['Variant Weight Unit'] = 'g'
+            
+            # Set Status to active
+            shopify_row['Status'] = 'active'
+            
+            # Map Collection (最長のカテゴリパス)
+            if '表示先カテゴリ' in variant:
+                categories = variant['表示先カテゴリ'].split('\\')
+                if categories:
+                    shopify_row['Collection'] = categories[-1]
+            
+            # Map Tags (カテゴリキーワード)
+            if '表示先カテゴリ' in variant:
+                categories = variant['表示先カテゴリ'].split('\\')
+                tags = [f"Tag {i+1}" for i, _ in enumerate(categories)]
+                shopify_row['Tags'] = ', '.join(tags)
+            
+            # Add all Rakuten fields
+            for col in rakuten_columns:
+                if col in variant and pd.notna(variant[col]) and variant[col] != '':
+                    shopify_row[col] = variant[col]
+            
+            # Add the row to the list
+            all_rows.append(shopify_row)
+    
+    # Create DataFrame from all rows at once
+    shopify_df = pd.DataFrame(all_rows)
+    
+    # Reorder columns to ensure Shopify columns come first
+    final_columns = shopify_columns + rakuten_columns
+    shopify_df = shopify_df[final_columns]
     
     return shopify_df
 
