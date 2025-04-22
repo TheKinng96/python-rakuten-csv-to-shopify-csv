@@ -97,7 +97,8 @@ def merge_products():
         'unique_base_skus': set(),
         'max_variants': 0,
         'processing_time': None,
-        'output_files': []
+        'output_files': [],
+        'processed_files': []
     }
 
     # Get all CSV files in the split_output directory
@@ -126,6 +127,7 @@ def merge_products():
         
         if df is not None and not df.empty:
             all_dfs.append(df)
+            stats['processed_files'].append(csv_file)
             print(f"Added DataFrame with {len(df)} rows")
         else:
             print(f"Warning: Could not read {csv_file} with any encoding")
@@ -168,7 +170,43 @@ def merge_products():
         print("Error: Could not find product name column")
         return
     
+    # First, identify and combine duplicate SKUs
+    print("Identifying and combining duplicate SKUs...")
+    sku_groups = {}
     for _, row in merged_df.iterrows():
+        sku = row.get(sku_column, '')
+        if pd.isna(sku) or not sku:
+            continue
+            
+        if sku not in sku_groups:
+            sku_groups[sku] = []
+        sku_groups[sku].append(row)
+    
+    # Combine duplicate SKUs
+    combined_rows = []
+    for sku, rows in sku_groups.items():
+        if len(rows) > 1:
+            print(f"Found {len(rows)} rows for SKU: {sku}")
+            # Create a combined row with data from all rows
+            combined_row = rows[0].copy()  # Start with the first row
+            
+            # Merge data from additional rows
+            for i in range(1, len(rows)):
+                for col in merged_df.columns:
+                    # If the column in the first row is empty but has data in subsequent rows, use that data
+                    if pd.isna(combined_row[col]) and pd.notna(rows[i][col]):
+                        combined_row[col] = rows[i][col]
+            
+            combined_rows.append(combined_row)
+        else:
+            combined_rows.append(rows[0])
+    
+    # Create a new DataFrame with combined rows
+    combined_df = pd.DataFrame(combined_rows)
+    print(f"Combined {len(merged_df)} rows into {len(combined_df)} rows")
+    
+    # Now group by base SKU
+    for _, row in combined_df.iterrows():
         sku = row.get(sku_column, '')
         if pd.isna(sku) or not sku:
             continue
@@ -244,6 +282,12 @@ def generate_summary_report(stats):
 - **Unique Base SKUs**: {len(stats['unique_base_skus'])}
 - **Maximum Variants per Product**: {stats['max_variants']}
 - **Total Processing Time**: {stats['processing_time']:.2f} seconds
+
+## Processing Order
+
+The following files were processed in order:
+
+{chr(10).join(f"{i+1}. {os.path.basename(file)}" for i, file in enumerate(stats['processed_files']))}
 
 ## Output Files
 
@@ -379,6 +423,11 @@ def create_shopify_format(df):
             for col in rakuten_columns:
                 shopify_row[col] = None
             
+            # Copy all Rakuten data from the original variant
+            for col in rakuten_columns:
+                if col in variant and pd.notna(variant[col]):
+                    shopify_row[col] = variant[col]
+            
             # Set Handle to base SKU
             shopify_row['Handle'] = base_sku
             
@@ -453,54 +502,47 @@ def create_shopify_format(df):
             shopify_row['Variant Barcode'] = ''
             
             # Map Image Src (商品画像)
-            if '商品画像タイプ1' in variant and '商品画像パス1' in variant:
-                shopify_row['Image Src'] = f"https://tshop.r10s.jp/tsutsu-uraura/{variant['商品画像タイプ1']}{variant['商品画像パス1']}"
+            image_rows = []
+            for i in range(1, 21):  # Process images 1 through 20
+                type_col = f'商品画像タイプ{i}'
+                path_col = f'商品画像パス{i}'
+                alt_col = f'商品画像名(ALT) {i}'
+                if type_col in variant and path_col in variant:
+                    image_type = variant[type_col]
+                    image_path = variant[path_col]
+                    if pd.notna(image_type) and pd.notna(image_path):
+                        image_type = str(image_type).lower()
+                        image_path = str(image_path).lower()
+                        image_url = f"https://tshop.r10s.jp/tsutsu-uraura/{image_type}{image_path}"
+                        
+                        # Create a new row for each image
+                        image_row = {}
+                        # Initialize all columns as None
+                        for col in shopify_columns + rakuten_columns:
+                            image_row[col] = None
+                        
+                        # Copy all Rakuten data from the original variant
+                        for col in rakuten_columns:
+                            if col in variant and pd.notna(variant[col]):
+                                image_row[col] = variant[col]
+                        
+                        # Set only the required fields
+                        image_row['Handle'] = base_sku
+                        image_row['Image Src'] = image_url
+                        image_row['Image Position'] = str(i)  # Position starts from 1
+                        if alt_col in variant and pd.notna(variant[alt_col]):
+                            image_row['Image Alt Text'] = variant[alt_col]
+                        
+                        image_rows.append(image_row)
             
-            # Set Image Position to 1
-            shopify_row['Image Position'] = '1'
-            
-            # Map Image Alt Text (商品画像名(ALT))
-            if '商品画像名(ALT) 1' in variant:
-                shopify_row['Image Alt Text'] = variant['商品画像名(ALT) 1']
-            
-            # Set Gift Card to false
-            shopify_row['Gift Card'] = 'false'
-            
-            # Map SEO Title (Title)
-            if '商品名' in variant:
-                shopify_row['SEO Title'] = variant['商品名']
-            elif '商品名（商品URL）' in variant:
-                shopify_row['SEO Title'] = variant['商品名（商品URL）']
-            
-            # Map SEO Description (キャッチコピー)
-            if 'キャッチコピー' in variant:
-                shopify_row['SEO Description'] = variant['キャッチコピー']
-            
-            # Set Variant Weight Unit to g
-            shopify_row['Variant Weight Unit'] = 'g'
-            
-            # Set Status to active
-            shopify_row['Status'] = 'active'
-            
-            # Map Collection (最長のカテゴリパス)
-            if '表示先カテゴリ' in variant:
-                categories = variant['表示先カテゴリ'].split('\\')
-                if categories:
-                    shopify_row['Collection'] = categories[-1]
-            
-            # Map Tags (カテゴリキーワード)
-            if '表示先カテゴリ' in variant:
-                categories = variant['表示先カテゴリ'].split('\\')
-                tags = [f"Tag {i+1}" for i, _ in enumerate(categories)]
-                shopify_row['Tags'] = ', '.join(tags)
-            
-            # Add all Rakuten fields
-            for col in rakuten_columns:
-                if col in variant and pd.notna(variant[col]) and variant[col] != '':
-                    shopify_row[col] = variant[col]
-            
-            # Add the row to the list
+            # Add the main row with all product information
             all_rows.append(shopify_row)
+            
+            # Add additional rows for each image
+            all_rows.extend(image_rows)
+            
+            # Set Image Position to 1 for the main row
+            shopify_row['Image Position'] = '1'
     
     # Create DataFrame from all rows at once
     shopify_df = pd.DataFrame(all_rows)
