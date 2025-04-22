@@ -503,19 +503,38 @@ def create_shopify_format(df):
             
             # Map Image Src (商品画像)
             image_rows = []
-            for i in range(1, 21):  # Process images 1 through 20
+            has_multiple_images = False
+            
+            # First, check if there are multiple images
+            for i in range(2, 21):  # Check images 2 through 20
                 type_col = f'商品画像タイプ{i}'
                 path_col = f'商品画像パス{i}'
-                alt_col = f'商品画像名(ALT) {i}'
                 if type_col in variant and path_col in variant:
-                    image_type = variant[type_col]
-                    image_path = variant[path_col]
-                    if pd.notna(image_type) and pd.notna(image_path):
-                        image_type = str(image_type).lower()
-                        image_path = str(image_path).lower()
-                        image_url = f"https://tshop.r10s.jp/tsutsu-uraura/{image_type}{image_path}"
-                        
-                        # Create a new row for each image
+                    if pd.notna(variant[type_col]) and pd.notna(variant[path_col]):
+                        has_multiple_images = True
+                        break
+            
+            # Process the first image
+            type_col = '商品画像タイプ1'
+            path_col = '商品画像パス1'
+            alt_col = '商品画像名(ALT) 1'
+            
+            if type_col in variant and path_col in variant:
+                image_type = variant[type_col]
+                image_path = variant[path_col]
+                if pd.notna(image_type) and pd.notna(image_path):
+                    image_type = str(image_type).lower()
+                    image_path = str(image_path).lower()
+                    image_url = f"https://tshop.r10s.jp/tsutsu-uraura/{image_type}{image_path}"
+                    
+                    # If there's only one image, include it in the main row
+                    if not has_multiple_images:
+                        shopify_row['Image Src'] = image_url
+                        shopify_row['Image Position'] = '1'
+                        if alt_col in variant and pd.notna(variant[alt_col]):
+                            shopify_row['Image Alt Text'] = variant[alt_col]
+                    else:
+                        # If there are multiple images, create a separate row for the first image
                         image_row = {}
                         # Initialize all columns as None
                         for col in shopify_columns + rakuten_columns:
@@ -529,7 +548,40 @@ def create_shopify_format(df):
                         # Set only the required fields
                         image_row['Handle'] = base_sku
                         image_row['Image Src'] = image_url
-                        image_row['Image Position'] = str(i)  # Position starts from 1
+                        image_row['Image Position'] = '1'
+                        if alt_col in variant and pd.notna(variant[alt_col]):
+                            image_row['Image Alt Text'] = variant[alt_col]
+                        
+                        image_rows.append(image_row)
+            
+            # Process additional images (2-20)
+            for i in range(2, 21):
+                type_col = f'商品画像タイプ{i}'
+                path_col = f'商品画像パス{i}'
+                alt_col = f'商品画像名(ALT) {i}'
+                if type_col in variant and path_col in variant:
+                    image_type = variant[type_col]
+                    image_path = variant[path_col]
+                    if pd.notna(image_type) and pd.notna(image_path):
+                        image_type = str(image_type).lower()
+                        image_path = str(image_path).lower()
+                        image_url = f"https://tshop.r10s.jp/tsutsu-uraura/{image_type}{image_path}"
+                        
+                        # Create a new row for each additional image
+                        image_row = {}
+                        # Initialize all columns as None
+                        for col in shopify_columns + rakuten_columns:
+                            image_row[col] = None
+                        
+                        # Copy all Rakuten data from the original variant
+                        for col in rakuten_columns:
+                            if col in variant and pd.notna(variant[col]):
+                                image_row[col] = variant[col]
+                        
+                        # Set only the required fields
+                        image_row['Handle'] = base_sku
+                        image_row['Image Src'] = image_url
+                        image_row['Image Position'] = str(i)
                         if alt_col in variant and pd.notna(variant[alt_col]):
                             image_row['Image Alt Text'] = variant[alt_col]
                         
@@ -538,11 +590,9 @@ def create_shopify_format(df):
             # Add the main row with all product information
             all_rows.append(shopify_row)
             
-            # Add additional rows for each image
-            all_rows.extend(image_rows)
-            
-            # Set Image Position to 1 for the main row
-            shopify_row['Image Position'] = '1'
+            # Add additional rows for each image (only if there are multiple images)
+            if has_multiple_images:
+                all_rows.extend(image_rows)
     
     # Create DataFrame from all rows at once
     shopify_df = pd.DataFrame(all_rows)
