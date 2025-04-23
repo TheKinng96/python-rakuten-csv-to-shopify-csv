@@ -58,9 +58,6 @@ search for SKU管理番号 then group products, rules
 metafields process
 - add all to store maybe with matrixify?
 
-shopify csv rules
-- 
-
 ## Shopify Variant Rules
 
 | Shopify Field | Rakuten Field | Rules/Notes |
@@ -99,3 +96,9 @@ shopify csv rules
 ### Metafields Processing
 - Add all metafields to store (possibly with matrixify)
 - Include units in metafield values where applicable
+
+# New Planning
+1. Create Smart Collections with admin GraphQL
+2. Rakuten -> Shopify CSV through Shopify products import
+  - limitation: 1 product can only assigned to 1 collection
+  - use tags for smart collection rule matching

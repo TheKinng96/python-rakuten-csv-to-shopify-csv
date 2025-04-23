@@ -3,12 +3,10 @@ import glob
 import os
 import re
 import math
-from collections import defaultdict
-from difflib import SequenceMatcher
 from datetime import datetime
 import traceback
 
-def find_common_substring(strings):
+def find_common_substring(strings: list[str]) -> str:
     """Find the longest common substring among a list of strings."""
     if not strings:
         return ""
@@ -18,6 +16,10 @@ def find_common_substring(strings):
         return strings[0]
     
     # Find the shortest string to use as reference
+    # For example, given:
+    #     strings = ["flower", "flow", "flight"]
+    # min(strings, key=len) returns "flow" (length 4), 
+    # because len("flow") == 4 is the smallest among [6, 4, 6].
     shortest = min(strings, key=len)
     
     # Try different lengths of substrings from the shortest string
@@ -30,7 +32,7 @@ def find_common_substring(strings):
     
     return ""
 
-def clean_product_name(name):
+def clean_product_name(name: str) -> str:
     """Clean product name by removing common prefixes/suffixes."""
     # Remove common prefixes/suffixes that might differ between variants
     patterns = [
@@ -56,7 +58,8 @@ def clean_product_name(name):
     
     return cleaned_name.strip()
 
-def extract_base_sku(sku):
+# Return the base SKU
+def extract_base_sku(sku: str) -> str:
     """Extract the base SKU by removing variant suffixes like -01, -02, etc."""
     if pd.isna(sku) or sku == '':
         return ''
@@ -67,7 +70,7 @@ def extract_base_sku(sku):
         return match.group(1)
     return str(sku)
 
-def split_dataframe(df, chunk_size_mb=10):
+def split_dataframe(df: pd.DataFrame, chunk_size_mb: int = 10) -> list[pd.DataFrame]:
     """Split a DataFrame into smaller chunks based on file size."""
     # Estimate the size of the DataFrame in MB
     df_size_mb = len(df) * len(df.columns) * 100 / (1024 * 1024)  # Rough estimate
@@ -84,12 +87,12 @@ def split_dataframe(df, chunk_size_mb=10):
     # Split the DataFrame
     chunks = []
     for i in range(0, len(df), rows_per_chunk):
-        chunk = df.iloc[i:i+rows_per_chunk]
+        chunk = df.iloc[i:i+rows_per_chunk] # select rows from i to i+rows_per_chunk
         chunks.append(chunk)
     
     return chunks
 
-def merge_products():
+def merge_products() -> None:
     """Merge product data from CSV files."""
     start_time = datetime.now()
     stats = {
