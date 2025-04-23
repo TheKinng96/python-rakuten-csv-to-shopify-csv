@@ -12,6 +12,7 @@ import pandas as pd
 import os
 from typing import List, Dict
 from collections import defaultdict
+from pathlib import Path
 
 def extract_and_sort_skus(input_file: str = 'shopify_products.csv', 
                          output_file: str = 'sorted_skus.csv') -> None:
@@ -22,15 +23,21 @@ def extract_and_sort_skus(input_file: str = 'shopify_products.csv',
         input_file: Path to the input CSV file (default: 'shopify_products.csv')
         output_file: Path to save the sorted SKUs (default: 'sorted_skus.csv')
     """
+    # Convert to Path objects
+    input_path = Path(input_file)
+    output_path = Path(output_file)
+    
     # Check if input file exists
-    if not os.path.exists(input_file):
-        print(f"Error: Input file '{input_file}' does not exist.")
+    if not input_path.exists():
+        print(f"Error: Input file '{input_path}' does not exist.")
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Absolute path: {input_path.absolute()}")
         return
     
     try:
         # Read the CSV file
-        print(f"Reading {input_file}...")
-        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Reading {input_path}...")
+        df = pd.read_csv(input_path, encoding='utf-8')
         
         # Group variant SKUs by handle
         print("Grouping variant SKUs by handle...")
@@ -49,26 +56,35 @@ def extract_and_sort_skus(input_file: str = 'shopify_products.csv',
         # Create a list of dictionaries for the DataFrame
         data = []
         for handle in sorted_handles:
-            # Sort variant SKUs for each handle
-            sorted_variants = sorted(handle_variants[handle])
-            for variant in sorted_variants:
-                data.append({
-                    'Handle': handle,
-                    'Variant SKU': variant
-                })
+            variants = sorted(handle_variants[handle])
+            data.append({
+                'Handle': handle,
+                'Variant SKUs': ', '.join(variants),
+                'Number of Variants': len(variants)
+            })
         
-        # Create DataFrame
+        # Create DataFrame and save to CSV
         result_df = pd.DataFrame(data)
         
-        # Save to CSV
-        print(f"Saving sorted handles and variant SKUs to {output_file}...")
-        result_df.to_csv(output_file, index=False, encoding='utf-8')
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        print(f"Successfully saved {len(sorted_handles)} unique handles with their variant SKUs to {output_file}")
+        print(f"Saving sorted SKUs to {output_path}...")
+        result_df.to_csv(output_path, index=False, encoding='utf-8')
+        print(f"Successfully saved {len(result_df)} handles to {output_path}")
         
     except Exception as e:
         print(f"Error processing file: {str(e)}")
-        return
+        print(f"Stack trace: {traceback.format_exc()}")
 
 if __name__ == "__main__":
-    extract_and_sort_skus() 
+    import sys
+    import traceback
+    
+    if len(sys.argv) > 2:
+        input_file = sys.argv[1]
+        output_file = sys.argv[2]
+        extract_and_sort_skus(input_file, output_file)
+    else:
+        print("Usage: python extract_skus.py <input_file> <output_file>")
+        print("Example: python extract_skus.py ./output/shopify_products.csv ./output/sorted_skus.csv") 

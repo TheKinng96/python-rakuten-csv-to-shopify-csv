@@ -1,10 +1,21 @@
+#!/usr/bin/env python3
+"""
+Script to convert Rakuten product data to Shopify format.
+The script will:
+1. Read the merged Rakuten products file
+2. Process and combine duplicate SKUs
+3. Sort products by 商品管理番号（商品URL）
+4. Save the processed data in Shopify format
+"""
+
 import pandas as pd
 import glob
 import os
 import re
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
+from pathlib import Path
 
 def find_common_substring(strings: list[str]) -> str:
     """Find the longest common substring among a list of strings."""
@@ -92,8 +103,8 @@ def split_dataframe(df: pd.DataFrame, chunk_size_mb: int = 10) -> list[pd.DataFr
     
     return chunks
 
-def merge_products() -> None:
-    """Merge product data from CSV files."""
+def convert_rakuten_to_shopify() -> None:
+    """Convert Rakuten product data to Shopify format."""
     start_time = datetime.now()
     stats = {
         'total_products': 0,
@@ -104,45 +115,31 @@ def merge_products() -> None:
         'processed_files': []
     }
 
-    # Get all CSV files in the split_output directory
-    csv_files = glob.glob('split_output/data_part_*.csv')
-    print(f"Found {len(csv_files)} CSV files to process")
-    
-    # Initialize an empty list to store all DataFrames
-    all_dfs = []
+    # Read the merged file
+    input_file = 'output/merged_products.csv'
+    print(f"Reading merged file: {input_file}")
     
     # Try different encodings
     encodings = ['shift-jis', 'utf-8', 'cp932']
+    merged_df = None
     
-    # Read and process each CSV file
-    for csv_file in csv_files:
-        df = None
-        for encoding in encodings:
-            try:
-                df = pd.read_csv(csv_file, encoding=encoding, dtype=str)
-                print(f"Successfully read {csv_file} with {encoding} encoding")
-                print(f"Columns found: {', '.join(df.columns)}")
-                print(f"Sample of first row: {df.iloc[0].to_dict()}")
-                break
-            except Exception as e:
-                print(f"Failed to read {csv_file} with {encoding} encoding: {str(e)}")
-                continue
-        
-        if df is not None and not df.empty:
-            all_dfs.append(df)
-            stats['processed_files'].append(csv_file)
-            print(f"Added DataFrame with {len(df)} rows")
-        else:
-            print(f"Warning: Could not read {csv_file} with any encoding")
+    for encoding in encodings:
+        try:
+            merged_df = pd.read_csv(input_file, encoding=encoding, dtype=str)
+            print(f"Successfully read {input_file} with {encoding} encoding")
+            print(f"Columns found: {', '.join(merged_df.columns)}")
+            print(f"Sample of first row: {merged_df.iloc[0].to_dict()}")
+            break
+        except Exception as e:
+            print(f"Failed to read {input_file} with {encoding} encoding: {str(e)}")
+            continue
     
-    if not all_dfs:
-        print("No data found in any of the CSV files")
+    if merged_df is None or merged_df.empty:
+        print("Error: Could not read the merged file")
         return
     
-    # Concatenate all DataFrames at once
-    merged_df = pd.concat(all_dfs, ignore_index=True)
-    print(f"Total rows after merging: {len(merged_df)}")
-    print(f"Columns in merged DataFrame: {', '.join(merged_df.columns)}")
+    stats['processed_files'].append(input_file)
+    print(f"Total rows in merged file: {len(merged_df)}")
     
     # Group products by base SKU
     base_sku_groups = {}
@@ -249,90 +246,112 @@ def merge_products() -> None:
     
     print(f"Processed {len(processed_products)} total products")
     
-    # Create final DataFrame
+    # Create final DataFrame and sort by 商品管理番号（商品URL）
     final_df = pd.DataFrame(processed_products)
+    final_df = final_df.sort_values(by=sku_column, ascending=True)
     
-    # Save merged products
-    merged_output = 'merged_products.csv'
-    final_df.to_csv(merged_output, index=False, encoding='utf-8')
-    stats['output_files'].append(merged_output)
-    print(f"Saved merged products to {merged_output}")
+    # Convert to Shopify format
+    print("Converting to Shopify format...")
+    shopify_df = create_shopify_format(final_df)
     
-    # Create and save Shopify format
-    try:
-        shopify_df = create_shopify_format(final_df)
-        shopify_output = 'shopify_products.csv'
-        shopify_df.to_csv(shopify_output, index=False, encoding='utf-8')
-        stats['output_files'].append(shopify_output)
-        print(f"Saved Shopify format products to {shopify_output}")
-    except Exception as e:
-        print(f"Error creating Shopify format: {str(e)}")
-        print(f"Stack trace: {traceback.format_exc()}")
+    # Ensure output directory exists
+    output_dir = Path('output')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save the final DataFrame
+    output_file = output_dir / 'shopify_products.csv'
+    shopify_df.to_csv(output_file, index=False, encoding='utf-8')
+    stats['output_files'].append(str(output_file))
+    print(f"Saved processed products to {output_file}")
     
     # Calculate processing time
-    stats['processing_time'] = (datetime.now() - start_time).total_seconds()
+    end_time = datetime.now()
+    stats['processing_time'] = end_time - start_time
     
     # Generate summary report
     generate_summary_report(stats)
+    
+    print("\nProcessing complete!")
+    print(f"Total time: {stats['processing_time']}")
+    print(f"Total products processed: {stats['total_products']}")
+    print(f"Unique base SKUs: {len(stats['unique_base_skus'])}")
+    print(f"Maximum variants per product: {stats['max_variants']}")
+    print(f"Output file: {output_file}")
 
 def generate_summary_report(stats):
-    """Generate a markdown summary report of the merging process."""
-    report = f"""# Rakuten to Shopify Product Migration Summary
+    """Generate a markdown summary report of the conversion process."""
+    # Format processing time
+    processing_time = stats['processing_time']
+    if isinstance(processing_time, timedelta):
+        total_seconds = processing_time.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = total_seconds % 60
+        time_str = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+    else:
+        time_str = str(processing_time)
+
+    report = f"""# Rakuten to Shopify Product Conversion Summary
 
 ## Processing Statistics
 
 - **Total Products Processed**: {stats['total_products']}
 - **Unique Base SKUs**: {len(stats['unique_base_skus'])}
 - **Maximum Variants per Product**: {stats['max_variants']}
-- **Total Processing Time**: {stats['processing_time']:.2f} seconds
+- **Total Processing Time**: {time_str}
 
-## Processing Order
+## Input File
 
-The following files were processed in order:
+- **Source**: {os.path.basename(stats['processed_files'][0])}
+  - Located in the output directory
+  - Contains merged Rakuten product data
 
-{chr(10).join(f"{i+1}. {os.path.basename(file)}" for i, file in enumerate(stats['processed_files']))}
+## Output File
 
-## Output Files
+- **Destination**: shopify_products.csv
+  - Located in the output directory
+  - Contains products formatted for Shopify
+  - Sorted by 商品管理番号（商品URL）
+  - Duplicate SKUs have been combined
+  - Products are grouped by base SKU
 
-1. **Merged Products** (`merged_products.csv`)
-   - Contains all products with their original Rakuten fields
-   - Products are grouped by their base SKU
+## Processing Details
+
+1. **Input Processing**
+   - Read merged Rakuten products file
+   - Identified and combined duplicate SKUs
+   - Grouped products by base SKU
+
+2. **Data Organization**
+   - Products are sorted by 商品管理番号（商品URL）
    - Each row represents a unique variant
+   - Common product information is shared across variants
+   - Variant-specific information is preserved
 
-2. **Shopify Format Products** (`shopify_products.csv`)
-   - Products are formatted according to Shopify's requirements
-   - Handle field uses the base SKU (e.g., "kr-cash500")
-   - Variant SKU field contains the full SKU (e.g., "kr-cash500-2s")
-   - Common product information (Title, Description) is shared across variants
-   - Variant-specific information (price, inventory) is unique to each variant
-
-## Variant Handling
-
-- Products are grouped by their base SKU (the part before any hyphen)
-- All variants of the same product share:
-  - Handle (base SKU)
-  - Title
-  - Description
-  - Common product information
-- Each variant maintains its own:
-  - Variant SKU (full SKU)
-  - Price
-  - Inventory
-  - Variant-specific attributes
+3. **Output Format**
+   - CSV format with UTF-8 encoding
+   - All Japanese text is properly encoded
+   - Maintains original Rakuten data structure
+   - Ready for Shopify import
 
 ## Notes
 
-- The script processes all CSV files in the split_output directory
+- The script processes the merged Rakuten products file
 - Products are properly grouped by their base SKU
-- Variant information is preserved and correctly mapped to Shopify's format
+- Variant information is preserved
 - All Japanese text is properly encoded using UTF-8
 """
     
-    # Save the report to a markdown file
-    with open('migration_summary.md', 'w', encoding='utf-8') as f:
+    # Ensure output directory exists
+    output_dir = Path('output')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save the report to a markdown file in the output directory
+    report_file = output_dir / 'conversion_summary.md'
+    with open(report_file, 'w', encoding='utf-8') as f:
         f.write(report)
     
-    print(f"Summary report saved to migration_summary.md")
+    print(f"Summary report saved to {report_file}")
 
 def create_shopify_format(df):
     """Convert the merged DataFrame to Shopify format."""
@@ -607,4 +626,4 @@ def create_shopify_format(df):
     return shopify_df
 
 if __name__ == '__main__':
-    merge_products() 
+    convert_rakuten_to_shopify() 
