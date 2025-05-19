@@ -1,13 +1,13 @@
 # MVP TODO List
 
 ## Core Implementation
-- [ ] Create project structure with required files:
-  - [ ] app.py (main entry point)
-  - [ ] splitter.py (CSV splitting logic)
-  - [ ] grouper.py (grouping logic)
-  - [ ] ui.py (GUI implementation)
-  - [ ] utils.py (file I/O helpers)
-  - [ ] requirements.txt
+- [x] Create project structure with required files:
+  - [x] app.py (main entry point)
+  - [x] splitter.py (CSV splitting logic)
+  - [x] grouper.py (grouping logic)
+  - [x] ui.py (GUI implementation)
+  - [x] utils.py (file I/O helpers)
+  - [x] requirements.txt
 
 ## Core Features
 - [ ] Implement CSV splitting functionality

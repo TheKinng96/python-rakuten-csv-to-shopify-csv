@@ -5,3 +5,5 @@ shopify_products.csv
 merged_products.csv
 migration_summary.md
 output/*
+__pycache__
+venv
