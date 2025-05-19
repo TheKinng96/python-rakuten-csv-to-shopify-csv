@@ -32,7 +32,7 @@ if __name__ == "__main__":
     # Try encodings for Japanese files
     for enc in ("cp932", "shift-jis", "utf-8"):
         try:
-            split_csv_by_size("./sample/dl-normal-item_no_desc.csv", max_bytes=10*1024*1024, encoding=enc)
+            split_csv_by_size("./sample/dl-normal-item_no_desc.csv", max_bytes=8*1024*1024, encoding=enc)
             break
         except UnicodeDecodeError:
             continue
