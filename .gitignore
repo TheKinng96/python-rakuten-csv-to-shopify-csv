@@ -7,3 +7,5 @@ migration_summary.md
 output/*
 __pycache__
 venv
+dl-normal-item.csv
+attributes_detailed.csv
