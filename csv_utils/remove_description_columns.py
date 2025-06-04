@@ -3,7 +3,7 @@ from pathlib import Path
 import logging
 
 def remove_description_columns(
-    input_csv: str = "./sample/dl-normal-item.csv",
+    input_csv: str = "./sample/new.csv",
     output_csv: str = "./sample/dl-normal-item_no_desc.csv"
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
