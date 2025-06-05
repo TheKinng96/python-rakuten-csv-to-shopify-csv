@@ -9,3 +9,5 @@ __pycache__
 venv
 dl-normal-item.csv
 attributes_detailed.csv
+rakuten_collection.csv
+rakuten_item.csv
