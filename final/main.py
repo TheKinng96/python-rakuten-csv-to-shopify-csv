@@ -3,17 +3,19 @@
 Author : your‑name‑here
 Usage  : python convert_rakuten_to_shopify.py
 
-This script incorporates the latest refinements:
-1.  Correctly appends the unit to the '容量・サイズ' metafield.
-2.  Dynamically sets 'Variant Weight Unit' based on attributes.
-3.  Automatically converts relative image paths into absolute URLs.
-4.  Correctly merges Rakuten's two-row product format.
-5.  Maps price fields accurately.
+This script produces a Shopify-compliant CSV by:
+1.  Setting Option1 Name to 'セット' and parsing the value from the SKU.
+2.  Correctly separating the Product Image Gallery (Image Src) from the
+    Variant Image assignment, leaving Variant Image blank on the first row.
+3.  Generating skinny image rows ONLY for product images not on the main row.
+4.  Placing the 'Status' field ONLY on the main product row.
+5.  Using a Set to deduplicate metafield values.
 """
 
 from __future__ import annotations
 import csv
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -89,10 +91,10 @@ def derive_handle(sku: str) -> str:
         if suffix[:-1].isdigit(): return base
     return sku
 
-def append(meta: dict[str, str], key: str, value: str, sep: str = ";") -> None:
-    if not value: return
-    current_value = meta.get(key, "")
-    meta[key] = f"{current_value}{sep if current_value else ''}{value}"
+def get_set_count(sku: str) -> str:
+    """Parses SKU like '...-3s' to return '3', or '1' for base products."""
+    match = re.search(r'-(\d+)s$', sku)
+    return match.group(1) if match else "1"
 
 def to_absolute_url(src: str) -> str:
     if not src or src.startswith(('http://', 'https://')): return src
@@ -157,75 +159,93 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
     writer.writeheader()
 
     for handle, product_group in processed_df.groupby('Handle'):
-        product_meta = {h: "" for h in META_HEADER}
+        product_meta_sets: dict[str, set[str]] = {}
         product_tags: set[str] = set()
-        product_images: dict[str, str] = {}
+        product_images_seen = set()
+        product_image_list = []
         variants_data: list[dict] = []
         main_product_row = product_group[product_group['SKU'] == handle].iloc[0] if not product_group[product_group['SKU'] == handle].empty else product_group.iloc[0]
 
         for _, r in product_group.iterrows():
-            sku = r['SKU']
-            variant_images = {}
-            weight_unit, volume_unit = None, None
+            sku = r['SKU']; variant_image_src = None; weight_unit, volume_unit = None, None
             for n in range(1, 21):
                 src = to_absolute_url(r.get(f"商品画像パス{n}", "").strip())
                 if src:
-                    alt = r.get(f"商品画像名（ALT）{n}", "").strip()
-                    variant_images[src] = alt; product_images[src] = alt
+                    if not variant_image_src: variant_image_src = src
+                    if src not in product_images_seen:
+                        alt = r.get(f"商品画像名（ALT）{n}", "").strip(); product_image_list.append((src, alt)); product_images_seen.add(src)
             for i in range(1, 101):
                 k = r.get(f"商品属性（項目）{i}", "").strip(); v = r.get(f"商品属性（値）{i}", "").strip()
                 if not k or not v: continue
-                
                 unit = r.get(f"商品属性（単位）{i}", "").strip()
                 if k == '総重量' and v and unit: weight_unit = unit
                 elif k == '総容量' and v and unit: volume_unit = unit
-                
                 if k in SPECIAL_TAGS: product_tags.add(SPECIAL_TAGS[k]); continue
                 if k in FREE_TAG_KEYS: product_tags.add(v); continue
-                
                 dest = META_MAP.get(k)
                 if dest:
                     value_to_append = v
-                    if dest == "容量・サイズ(product.metafields.custom.size)" and unit:
-                        value_to_append += unit
-                    append(product_meta, dest, value_to_append)
-                else:
-                    append(product_meta, "その他 (product.metafields.custom.etc)", f"{k}:{v}")
-            
+                    if dest == "容量・サイズ(product.metafields.custom.size)" and unit: value_to_append += unit
+                    product_meta_sets.setdefault(dest, set()).add(value_to_append)
+                else: product_meta_sets.setdefault("その他 (product.metafields.custom.etc)", set()).add(f"{k}:{v}")
             variants_data.append({
-                "Variant SKU": sku, "Option1 Value": sku.replace(handle, '').lstrip('-') or handle,
+                "Variant SKU": sku, "Option1 Value": get_set_count(sku),
                 "Variant Price": r.get("通常購入販売価格", "").strip(), "Variant Compare At Price": r.get("表示価格", "").strip(),
                 "Variant Inventory Qty": r.get("在庫数", "0").strip(),
                 CATALOG_ID_SHOPIFY_COLUMN: r.get(CATALOG_ID_RAKUTEN_KEY, ''),
-                "variant_image_src": list(variant_images.keys())[0] if variant_images else None,
-                "variant_weight_unit": weight_unit or volume_unit or ""
+                "variant_image_src": variant_image_src, "variant_weight_unit": weight_unit or volume_unit or ""
             })
 
         variants_data.sort(key=lambda v: v['Variant SKU'] != handle)
-        product_image_list = list(product_images.items())
+        rows_to_write = []
+        product_meta = {key: ";".join(sorted(list(val_set))) for key, val_set in product_meta_sets.items()}
+        if collection_map.get(handle): product_meta["商品カテゴリー (product.metafields.custom.attributes)"] = collection_map[handle]
+        
+        # --- Row Generation: Main Product Row ---
+        if variants_data:
+            first_variant = variants_data[0]
+            main_row = {h: "" for h in HEADER}
+            main_row.update({
+                "Handle": handle, "Title": main_product_row.get("商品名", ""),
+                "Body (HTML)": main_product_row.get("PC用商品説明文", ""),
+                "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), "Type": "", "Published": "TRUE",
+                "Tags": ",".join(sorted(list(product_tags))), "Status": "active",
+                "Option1 Name": "セット", "Option1 Value": first_variant["Option1 Value"],
+                "Variant SKU": first_variant["Variant SKU"], "Variant Price": first_variant["Variant Price"],
+                "Variant Compare At Price": first_variant["Variant Compare At Price"],
+                "Variant Inventory Qty": first_variant["Variant Inventory Qty"],
+                "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny",
+                "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "TRUE", "Variant Taxable": "TRUE",
+                "Variant Weight Unit": first_variant["variant_weight_unit"],
+                CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": "",
+            })
+            main_row.update(product_meta)
+            if product_image_list:
+                main_row["Image Src"] = product_image_list[0][0]; main_row["Image Position"] = 1; main_row["Image Alt Text"] = product_image_list[0][1]
+            rows_to_write.append(main_row)
 
-        for i, v_data in enumerate(variants_data):
-            row = {h: "" for h in HEADER}
-            row.update({
-                "Handle": handle, "Option1 Name": "Style" if len(variants_data) > 1 else "",
-                "Variant SKU": v_data["Variant SKU"], "Option1 Value": v_data["Option1 Value"] if len(variants_data) > 1 else "Default Title",
-                "Variant Price": v_data["Variant Price"], "Variant Compare At Price": v_data["Variant Compare At Price"],
+        # --- Row Generation: Subsequent Variant Rows ---
+        for i, v_data in enumerate(variants_data[1:]):
+            variant_row = {h: "" for h in HEADER}
+            variant_row.update({
+                "Handle": handle, "Option1 Name": "セット", "Option1 Value": v_data["Option1 Value"],
+                "Variant SKU": v_data["Variant SKU"], "Variant Price": v_data["Variant Price"],
+                "Variant Compare At Price": v_data["Variant Compare At Price"],
                 "Variant Inventory Qty": v_data["Variant Inventory Qty"],
                 "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny",
-                "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "TRUE",
-                "Variant Taxable": "TRUE", "Variant Weight Unit": v_data["variant_weight_unit"],
-                CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": v_data["variant_image_src"],
+                "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "TRUE", "Variant Taxable": "TRUE",
+                "Variant Weight Unit": v_data["variant_weight_unit"],
+                CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN],
+                "Variant Image": v_data["variant_image_src"],
             })
-            if i == 0:
-                row["Title"] = main_product_row.get("商品名", ""); row["Body (HTML)"] = main_product_row.get("PC用商品説明文", "")
-                row["Vendor"] = main_product_row.get("ブランド名", "tsutsu-uraura"); row["Published"] = "TRUE"
-                row["Status"] = "active"; row["Tags"] = ",".join(sorted(list(product_tags)))
-                row.update(product_meta); row["Type"] = ""
-                if product_image_list:
-                    row["Image Src"] = product_image_list[0][0]; row["Image Position"] = 1; row["Image Alt Text"] = product_image_list[0][1]
-            writer.writerow(row)
-        
+            rows_to_write.append(variant_row)
+
+        # --- Row Generation: Additional Product Image Rows ---
         for pos, (src, alt) in enumerate(product_image_list[1:], start=2):
-             writer.writerow({"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt})
+             image_row = {h: "" for h in HEADER}
+             image_row.update({"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt})
+             rows_to_write.append(image_row)
+
+        writer.writerows(rows_to_write)
 
 print("[5/5] Done →", OUT_FILE)
