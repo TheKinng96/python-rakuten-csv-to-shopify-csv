@@ -24,7 +24,7 @@ python -m venv venv
 source venv/bin/activate    # Windows: venv\\Scripts\\activate
 
 # 2 ) install pandas only (no heavy deps!)
-pip install pandas==2.*
+pip install "pandas==2.*"
 
 # 3 ) drop your Rakuten CSVs in ./data and run
 python scripts/convert_rakuten_to_shopify.py

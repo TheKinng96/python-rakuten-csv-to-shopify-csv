@@ -30,7 +30,7 @@ DATA_DIR   = Path("data")
 OUT_DIR    = Path("output")
 OUT_FILE   = OUT_DIR / "shopify_products.csv"
 CHUNK_SIZE = 10_000            # number of lines to process at once
-RAKUTEN_ENCODING = "utf-8"     # change to "cp932" if your file is Shift‑JIS
+RAKUTEN_ENCODING = "cp932"     # change to "cp932" if your file is Shift‑JIS
 
 # Map 特殊キー → 強制タグ
 SPECIAL_TAGS: Dict[str, str] = {
