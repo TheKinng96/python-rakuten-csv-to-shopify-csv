@@ -11,3 +11,5 @@ dl-normal-item.csv
 attributes_detailed.csv
 rakuten_collection.csv
 rakuten_item.csv
+final/output/*
+final/data/*
