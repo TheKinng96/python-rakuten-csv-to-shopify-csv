@@ -134,14 +134,32 @@ if rejected_rows_log:
 # ---------------------------------------------------------------------------
 print("[4/5] Generating Shopify CSV from processed data…")
 with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
-    writer = csv.DictWriter(fout, fieldnames=HEADER, extrasaction='ignore'); writer.writeheader()
+    # Configure the CSV writer with specific quoting rules
+    writer = csv.DictWriter(
+        fout,
+        fieldnames=HEADER,
+        extrasaction='ignore',
+        delimiter=',',
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL,  # Only quote fields that need it
+        lineterminator='\n'
+    )
+    
+    # Function to preprocess rows before writing
+    def preprocess_row(row):
+        # Ensure Type, Tags, and Variant Barcode are always present
+        for field in ['Type', 'Tags', 'Variant Barcode']:
+            if field not in row or row[field] == '':
+                row[field] = ''
+        return row
+    writer.writeheader()
     for handle, product_group in processed_df.groupby('Handle'):
         product_meta_sets: dict[str, set[str]] = {}; product_tags: set[str] = set(); product_images_seen = set(); product_image_list = []; variants_data: list[dict] = []
         main_product_row = product_group[product_group['SKU'] == handle].iloc[0] if not product_group[product_group['SKU'] == handle].empty else product_group.iloc[0]
         for _, r in product_group.iterrows():
             sku = r['SKU']; variant_image_src = None; weight_unit, volume_unit = None, None
             for n in range(1, 21):
-                src = to_absolute_url(r.get(f"商品画像タイプ{n}", "") + "/" + r.get(f"商品画像パス{n}", "").strip())
+                src = to_absolute_url(r.get(f"商品画像タイプ{n}", "") + r.get(f"商品画像パス{n}", "").strip())
                 if src:
                     if not variant_image_src: variant_image_src = src
                     if src not in product_images_seen: alt = r.get(f"商品画像名（ALT）{n}", "").strip(); product_image_list.append((src, alt)); product_images_seen.add(src)
@@ -187,14 +205,68 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
 
         if variants_data:
             first_variant = variants_data[0]
-            main_row = {"Handle": handle, "Title": main_product_row.get("商品名", ""), "Body (HTML)": main_product_row.get("PC用商品説明文", ""), "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), "Product Category": "", "Type": "", "Published": "true", "Tags": ",".join(sorted(list(product_tags))), "Status": "active", "Option1 Name": "Set", "Option1 Value": first_variant["Option1 Value"], "Option1 Linked to": "", "Variant SKU": first_variant["Variant SKU"], "Variant Price": first_variant["Variant Price"], "Variant Compare At Price": first_variant["Variant Compare At Price"], "Variant Inventory Qty": first_variant["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": first_variant["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": ""}
+            main_row = {
+                "Handle": handle, 
+                "Title": main_product_row.get("商品名", ""), 
+                "Body (HTML)": main_product_row.get("PC用商品説明文", ""), 
+                "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), 
+                "Product Category": "", 
+                "Type": "",  # Ensure Type is always present as empty string
+                "Published": "true", 
+                "Tags": ",".join(sorted(list(product_tags))) if product_tags else "",  # Ensure Tags is at least empty string
+                "Status": "active", 
+                "Option1 Name": "Set", 
+                "Option1 Value": first_variant["Option1 Value"], 
+                "Option1 Linked to": "", 
+                "Variant SKU": first_variant["Variant SKU"], 
+                "Variant Barcode": "",  # Ensure Variant Barcode is always present as empty string
+                "Variant Price": first_variant["Variant Price"], 
+                "Variant Compare At Price": first_variant["Variant Compare At Price"], 
+                "Variant Inventory Qty": first_variant["Variant Inventory Qty"], 
+                "Variant Inventory Tracker": "shopify", 
+                "Variant Inventory Policy": "deny", 
+                "Variant Fulfillment Service": "manual", 
+                "Variant Requires Shipping": "true", 
+                "Variant Taxable": "true", 
+                "Variant Weight Unit": first_variant["variant_weight_unit"], 
+                CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], 
+                "Variant Image": ""
+            }
             main_row.update(product_meta)
-            if product_image_list: main_row["Image Src"] = product_image_list[0][0]; main_row["Image Position"] = 1; main_row["Image Alt Text"] = product_image_list[0][1]
+            if product_image_list: 
+                main_row["Image Src"] = product_image_list[0][0]
+                main_row["Image Position"] = 1
+                main_row["Image Alt Text"] = product_image_list[0][1]
             main_row["Gift Card"] = "false"
-            rows_to_write.append(main_row)
+            # Preprocess the row before adding to write queue
+            rows_to_write.append(preprocess_row(main_row))
+            
         for v_data in variants_data[1:]:
-            variant_row = {"Handle": handle, "Option1 Name": "Set", "Option1 Value": v_data["Option1 Value"], "Option1 Linked to": "", "Variant SKU": v_data["Variant SKU"], "Variant Price": v_data["Variant Price"], "Variant Compare At Price": v_data["Variant Compare At Price"], "Variant Inventory Qty": v_data["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": v_data["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": v_data["variant_image_src"], "Gift Card": "false"}
-            rows_to_write.append(variant_row)
+            variant_row = {
+                "Handle": handle, 
+                # These will be quoted when empty in the custom writer
+                "Type": "",  
+                "Tags": "",
+                "Option1 Name": "Set", 
+                "Option1 Value": v_data["Option1 Value"], 
+                "Option1 Linked to": "", 
+                "Variant SKU": v_data["Variant SKU"], 
+                "Variant Barcode": "",  # Ensure Variant Barcode is always present as empty string
+                "Variant Price": v_data["Variant Price"], 
+                "Variant Compare At Price": v_data["Variant Compare At Price"], 
+                "Variant Inventory Qty": v_data["Variant Inventory Qty"], 
+                "Variant Inventory Tracker": "shopify", 
+                "Variant Inventory Policy": "deny", 
+                "Variant Fulfillment Service": "manual", 
+                "Variant Requires Shipping": "true", 
+                "Variant Taxable": "true", 
+                "Variant Weight Unit": v_data["variant_weight_unit"], 
+                CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], 
+                "Variant Image": v_data["variant_image_src"], 
+                "Gift Card": "false"
+            }
+            # Preprocess the row before adding to write queue
+            rows_to_write.append(preprocess_row(variant_row))
         for pos, (src, alt) in enumerate(product_image_list[1:], start=2):
              image_row = {"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt, "Gift Card": "false"}
              rows_to_write.append(image_row)
