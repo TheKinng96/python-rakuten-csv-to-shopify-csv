@@ -62,9 +62,8 @@ except FileNotFoundError:
 # Header & Helpers
 # ---------------------------------------------------------------------------
 STANDARD_HEADER = [
-    "Handle","Title","Body (HTML)","Vendor","Type","Tags","Published",
-    "Option1 Name","Option1 Value","Option2 Name","Option2 Value",
-    "Option3 Name","Option3 Value","Variant SKU","Variant Grams",
+    "Handle","Title","Body (HTML)","Vendor", "Product Category","Type","Tags","Published",
+    "Option1 Name","Option1 Value","Option1 Linked to","Option2 Name","Option2 Value","Option2 Linked To","Option3 Name","Option3 Value","Option3 Linked To","Variant SKU","Variant Grams",
     "Variant Inventory Tracker","Variant Inventory Qty","Variant Inventory Policy",
     "Variant Fulfillment Service","Variant Price","Variant Compare At Price",
     "Variant Requires Shipping","Variant Taxable","Variant Barcode","Image Src",
@@ -142,7 +141,7 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
         for _, r in product_group.iterrows():
             sku = r['SKU']; variant_image_src = None; weight_unit, volume_unit = None, None
             for n in range(1, 21):
-                src = to_absolute_url(r.get(f"商品画像パス{n}", "").strip())
+                src = to_absolute_url(r.get(f"商品画像タイプ{n}", "") + "/" + r.get(f"商品画像パス{n}", "").strip())
                 if src:
                     if not variant_image_src: variant_image_src = src
                     if src not in product_images_seen: alt = r.get(f"商品画像名（ALT）{n}", "").strip(); product_image_list.append((src, alt)); product_images_seen.add(src)
@@ -188,15 +187,16 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
 
         if variants_data:
             first_variant = variants_data[0]
-            main_row = {"Handle": handle, "Title": main_product_row.get("商品名", ""), "Body (HTML)": main_product_row.get("PC用商品説明文", ""), "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), "Type": "", "Published": "TRUE", "Tags": ",".join(sorted(list(product_tags))), "Status": "active", "Option1 Name": "セット", "Option1 Value": first_variant["Option1 Value"], "Variant SKU": first_variant["Variant SKU"], "Variant Price": first_variant["Variant Price"], "Variant Compare At Price": first_variant["Variant Compare At Price"], "Variant Inventory Qty": first_variant["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "TRUE", "Variant Taxable": "TRUE", "Variant Weight Unit": first_variant["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": ""}
+            main_row = {"Handle": handle, "Title": main_product_row.get("商品名", ""), "Body (HTML)": main_product_row.get("PC用商品説明文", ""), "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), "Product Category": "", "Type": "", "Published": "true", "Tags": ",".join(sorted(list(product_tags))), "Status": "active", "Option1 Name": "Set", "Option1 Value": first_variant["Option1 Value"], "Option1 Linked to": "", "Variant SKU": first_variant["Variant SKU"], "Variant Price": first_variant["Variant Price"], "Variant Compare At Price": first_variant["Variant Compare At Price"], "Variant Inventory Qty": first_variant["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": first_variant["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": ""}
             main_row.update(product_meta)
             if product_image_list: main_row["Image Src"] = product_image_list[0][0]; main_row["Image Position"] = 1; main_row["Image Alt Text"] = product_image_list[0][1]
+            main_row["Gift Card"] = "false"
             rows_to_write.append(main_row)
         for v_data in variants_data[1:]:
-            variant_row = {"Handle": handle, "Option1 Name": "セット", "Option1 Value": v_data["Option1 Value"], "Variant SKU": v_data["Variant SKU"], "Variant Price": v_data["Variant Price"], "Variant Compare At Price": v_data["Variant Compare At Price"], "Variant Inventory Qty": v_data["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "TRUE", "Variant Taxable": "TRUE", "Variant Weight Unit": v_data["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": v_data["variant_image_src"]}
+            variant_row = {"Handle": handle, "Option1 Name": "Set", "Option1 Value": v_data["Option1 Value"], "Option1 Linked to": "", "Variant SKU": v_data["Variant SKU"], "Variant Price": v_data["Variant Price"], "Variant Compare At Price": v_data["Variant Compare At Price"], "Variant Inventory Qty": v_data["Variant Inventory Qty"], "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": v_data["variant_weight_unit"], CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": v_data["variant_image_src"], "Gift Card": "false"}
             rows_to_write.append(variant_row)
         for pos, (src, alt) in enumerate(product_image_list[1:], start=2):
-             image_row = {"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt}
+             image_row = {"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt, "Gift Card": "false"}
              rows_to_write.append(image_row)
         writer.writerows(rows_to_write)
 print("[5/5] Done →", OUT_FILE)
