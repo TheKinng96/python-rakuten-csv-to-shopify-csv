@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 Script to remove specific columns from CSV files.
+This version is specially designed to preserve the `""` format for specific
+empty fields, which is often lost by standard CSV writers.
+
 Commonly used to remove large or unnecessary columns like 'Body (HTML)' or 'カタログID (rakuten)'
 before importing to Shopify.
 """
@@ -8,118 +11,147 @@ before importing to Shopify.
 import csv
 import os
 import sys
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
+
+# --- Configuration for Special Formatting ---
+# Define which columns, when empty, should be written as `""` instead of `,,`
+SPECIAL_QUOTED_EMPTY_FIELDS = {'Type', 'Tags', 'Variant Barcode'}
+
+# --- Helper Function to Recreate Special Formatting ---
+def format_csv_value(value: Optional[str], header_name: str) -> str:
+    """
+    Formats a single value for CSV output, applying special rules.
+    - If the header is in SPECIAL_QUOTED_EMPTY_FIELDS and the value is empty, return '""'.
+    - If any other value is empty, return ''.
+    - If a value contains a comma or quote, wrap it in quotes and escape internal quotes.
+    """
+    # Rule 1: Handle our special empty fields that MUST be quoted.
+    if header_name in SPECIAL_QUOTED_EMPTY_FIELDS and (value is None or value == ''):
+        return '""'
+
+    # Rule 2: Handle all other None/empty values (output as true empty).
+    if value is None or value == '':
+        return ''
+
+    # Rule 3: Handle values that need standard CSV quoting.
+    s_value = str(value)
+    if '"' in s_value or ',' in s_value or '\n' in s_value:
+        # Escape double quotes and wrap the whole thing in double quotes.
+        return f'"{s_value.replace("\"", "\"\"")}"'
+
+    # Rule 4: Value is simple and needs no special formatting.
+    return s_value
 
 def modify_columns(
-    input_file: str, 
-    clear_columns: List[str] = None,
-    remove_columns: List[str] = None,
+    input_file: str,
+    clear_columns: Optional[List[str]] = None,
+    remove_columns: Optional[List[str]] = None,
     output_file: Optional[str] = None,
     encoding: str = 'utf-8'
 ) -> str:
     """
-    Process a CSV file to modify columns by either clearing their content or removing them entirely.
-    
+    Process a CSV file to modify columns, preserving special empty-field formatting.
+
     Args:
-        input_file: Path to the input CSV file
-        clear_columns: List of column names to clear (keeps column but empties content)
-        remove_columns: List of column names to remove (removes entire column)
-        output_file: Path to the output CSV file (optional)
-        encoding: File encoding (default: 'utf-8')
-        
+        input_file: Path to the input CSV file.
+        clear_columns: List of column names to clear (keeps column but empties content).
+        remove_columns: List of column names to remove (removes entire column).
+        output_file: Path to the output CSV file (optional).
+        encoding: File encoding (default: 'utf--8').
+
     Returns:
-        str: Path to the output file
+        str: Path to the output file.
     """
     if not clear_columns and not remove_columns:
         raise ValueError("At least one column must be specified in either clear_columns or remove_columns")
-    
-    clear_columns = clear_columns or []
-    remove_columns = remove_columns or []
-    
-    # Set default output filename if not provided
+
+    clear_columns = set(clear_columns or [])
+    remove_columns = set(remove_columns or [])
+
+    # --- Set default output filename if not provided ---
     if output_file is None:
         base, ext = os.path.splitext(input_file)
         action_parts = []
         if clear_columns:
-            action_parts.append("cleared_" + "_".join([col.split()[0] for col in clear_columns[:2]]))
+            action_parts.append("cleared")
         if remove_columns:
-            action_parts.append("removed_" + "_".join([col.split()[0] for col in remove_columns[:2]]))
-        
-        action_str = "_".join(action_parts)
-        if len(clear_columns) + len(remove_columns) > 2:
-            action_str = action_str.split('_')[0] + "_columns"
-            
+            action_parts.append("removed")
+        action_str = "_".join(action_parts) + "_cols"
         output_file = f"{base}_{action_str}{ext}"
-    
-    # Check if input file exists
+
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Input file '{input_file}' does not exist.")
     
-    # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_file)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
+
     try:
-        # Open the input and output files
         with open(input_file, 'r', encoding=encoding, newline='', errors='replace') as infile, \
              open(output_file, 'w', encoding=encoding, newline='') as outfile:
+
+            reader = csv.reader(infile)
             
-            reader = csv.DictReader(infile)
+            # --- Header Processing ---
+            original_header = next(reader)
             
-            # Get the fieldnames and remove columns that should be removed
-            fieldnames = [field for field in reader.fieldnames if field not in remove_columns]
+            # Identify indices of columns to clear/remove
+            clear_indices = {i for i, h in enumerate(original_header) if h in clear_columns}
+            remove_indices = {i for i, h in enumerate(original_header) if h in remove_columns}
             
-            # Check which columns were actually found
-            existing_clear_columns = set(clear_columns) & set(reader.fieldnames)
-            existing_remove_columns = set(remove_columns) & set(reader.fieldnames)
+            # Create the final output header
+            output_header = [h for i, h in enumerate(original_header) if i not in remove_indices]
             
-            # Print warnings for columns that weren't found
-            if clear_columns and not existing_clear_columns:
-                print("Warning: None of the columns to clear were found in the CSV file.")
-            if remove_columns and not existing_remove_columns:
-                print("Warning: None of the columns to remove were found in the CSV file.")
+            # Write the new header
+            outfile.write(",".join(output_header) + "\n")
             
-            # Write the output file with the updated headers
-            writer = csv.DictWriter(outfile, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
-            writer.writeheader()
-            
-            # Process each row
+            # --- Row Processing ---
             for row in reader:
-                # Clear the content of columns that should be cleared
-                for col in existing_clear_columns:
-                    if col in row:
-                        row[col] = ''
+                # Build the output row based on modification rules
+                output_row_values = []
+                for i, value in enumerate(row):
+                    if i in remove_indices:
+                        continue  # Skip removed columns
+                    if i in clear_indices:
+                        output_row_values.append('')  # Add an empty value for cleared columns
+                    else:
+                        output_row_values.append(value) # Keep original value
                 
-                # Remove columns that should be removed
-                for col in existing_remove_columns:
-                    if col in row:
-                        del row[col]
+                # Format each value in the output row using our special rules
+                formatted_values = [
+                    format_csv_value(val, header)
+                    for val, header in zip(output_row_values, output_header)
+                ]
                 
-                writer.writerow(row)
-        
-        # Prepare summary message
+                # Write the manually formatted line
+                outfile.write(",".join(formatted_values) + "\n")
+
+        # --- Summary Message ---
+        existing_clear = clear_columns & set(original_header)
+        existing_remove = remove_columns & set(original_header)
         messages = []
-        if existing_clear_columns:
-            cleared_list = ", ".join(f"'{col}'" for col in sorted(existing_clear_columns))
-            messages.append(f"Cleared content of: {cleared_list}")
-        if existing_remove_columns:
-            removed_list = ", ".join(f"'{col}'" for col in sorted(existing_remove_columns))
-            messages.append(f"Removed columns: {removed_list}")
+        if existing_clear:
+            messages.append(f"Cleared content of: {', '.join(sorted(list(existing_clear)))}")
+        if existing_remove:
+            messages.append(f"Removed columns: {', '.join(sorted(list(existing_remove)))}")
         
         print("\n".join(messages))
         print(f"\nOutput saved to: {output_file}")
         return output_file
-        
+
     except Exception as e:
+        # Provide more context on error
+        import traceback
+        traceback.print_exc()
         raise Exception(f"Error processing CSV file: {str(e)}")
+
 
 def main():
     """Handle command line interface."""
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Modify CSV files by clearing or removing columns.',
+        description='Modify CSV files by clearing or removing columns while preserving special "" formatting.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''Examples:
   # Clear content of specific columns (keeps the columns but empties them)
