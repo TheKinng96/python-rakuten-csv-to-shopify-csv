@@ -64,7 +64,11 @@ META_HEADER_KEYS = {
     "商品カテゴリー (product.metafields.custom.attributes)",
     "その他 (product.metafields.custom.etc)",
 }
-META_HEADER = sorted(list(set(META_MAP.values()) | META_HEADER_KEYS))
+
+# --- MODIFICATION: Ensure no standard columns are duplicated as metafields ---
+all_meta_values = set(META_MAP.values()) | META_HEADER_KEYS
+META_HEADER = sorted(list(all_meta_values - set(STANDARD_HEADER))) # This subtraction prevents duplicates
+
 HEADER = STANDARD_HEADER + [CATALOG_ID_SHOPIFY_COLUMN] + META_HEADER
 
 def derive_handle(sku: str) -> str:
@@ -80,26 +84,19 @@ def to_absolute_url(src: str) -> str:
     if not src or src.startswith(('http://', 'https://')): return src
     return f"{IMAGE_DOMAIN}/{src.lstrip('/')}"
 
-# --- THIS IS THE CORRECT, ROBUST HELPER FUNCTION ---
 def format_csv_value(value, header_name):
     """Formats a single value for CSV output according to our specific rules."""
-    # Rule 1: Handle our special empty fields that MUST be quoted.
     if header_name in SPECIAL_QUOTED_EMPTY_FIELDS and (value is None or str(value).strip() == ''):
         return '""'
-
-    # Rule 2: Handle all other None/empty values (output as true empty).
     if value is None or str(value).strip() == '':
         return ''
-
-    # Rule 3: Handle values that need standard CSV quoting.
     s_value = str(value)
     if '"' in s_value or ',' in s_value or '\n' in s_value:
-        # Escape double quotes and wrap the whole thing in double quotes.
         return f'"{s_value.replace("\"", "\"\"")}"'
-
-    # Rule 4: Value is simple and needs no special formatting.
     return s_value
 
+# (The rest of the script, from Pre-processing onward, is correct and does not need to be changed.)
+# ...
 # ---------------------------------------------------------------------------
 # Pre-processing Stage (Unchanged)
 # ---------------------------------------------------------------------------
@@ -138,42 +135,80 @@ if rejected_rows_log:
 # ---------------------------------------------------------------------------
 print("[4/5] Generating Shopify CSV from processed data…")
 with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
-    # Write header manually
     fout.write(",".join(HEADER) + "\n")
 
     for handle, product_group in processed_df.groupby('Handle'):
-        # (The logic for gathering data into `rows_to_write` is unchanged)
         product_meta_sets: dict[str, set[str]] = {}; product_tags: set[str] = set(); product_images_seen = set(); product_image_list = []; variants_data: list[dict] = []
         main_product_row = product_group[product_group['SKU'] == handle].iloc[0] if not product_group[product_group['SKU'] == handle].empty else product_group.iloc[0]
+
         for _, r in product_group.iterrows():
-            sku = r['SKU']; variant_image_src = None; weight_unit, volume_unit = None, None
+            sku = r['SKU']; variant_image_src = None
+            weight_value, weight_unit_str = None, None
+            volume_value, volume_unit_str = None, None
+
             for n in range(1, 21):
                 src = to_absolute_url((r.get(f"商品画像タイプ{n}", "") + r.get(f"商品画像パス{n}", "").strip()).lower())
                 if src:
                     if not variant_image_src: variant_image_src = src
-                    if src not in product_images_seen: alt = r.get(f"商品画像名（ALT）{n}", "").strip(); product_image_list.append((src, alt)); product_images_seen.add(src)
+                    if src not in product_images_seen:
+                        alt = r.get(f"商品画像名（ALT）{n}", "").strip()
+                        product_image_list.append((src, alt))
+                        product_images_seen.add(src)
+
             for i in range(1, 101):
-                k = r.get(f"商品属性（項目）{i}", "").strip(); v = r.get(f"商品属性（値）{i}", "").strip();
+                k = r.get(f"商品属性（項目）{i}", "").strip(); v = r.get(f"商品属性（値）{i}", "").strip()
                 if not k or not v: continue
                 unit = r.get(f"商品属性（単位）{i}", "").strip()
-                if k == '総重量' and v and unit: weight_unit = unit
-                elif k == '総容量' and v and unit: volume_unit = unit
+
+                if k == '総重量' and v and unit:
+                    weight_value, weight_unit_str = v, unit
+                elif k == '総容量' and v and unit:
+                    volume_value, volume_unit_str = v, unit
+
                 if k in SPECIAL_TAGS: product_tags.add(SPECIAL_TAGS[k]); continue
                 if k in FREE_TAG_KEYS: product_tags.add(v); continue
                 dest = META_MAP.get(k)
                 if dest:
                     value_to_append = v
-                    if dest == "容量・サイズ(product.metafields.custom.size)" and unit: value_to_append += unit
+                    if dest == "容量・サイズ(product.metafields.custom.size)" and unit:
+                        value_to_append += unit
                     product_meta_sets.setdefault(dest, set()).add(value_to_append)
-                else: product_meta_sets.setdefault("その他 (product.metafields.custom.etc)", set()).add(f"{k}:{v}")
+                else:
+                    product_meta_sets.setdefault("その他 (product.metafields.custom.etc)", set()).add(f"{k}:{v}")
+
+            variant_grams = ''
+            variant_weight_unit = ''
+            try:
+                if weight_value and weight_unit_str:
+                    variant_weight_unit = weight_unit_str
+                    val_numeric = float(weight_value)
+                    if weight_unit_str.lower() == 'kg':
+                        variant_grams = str(int(val_numeric * 1000))
+                    else: # Assume grams
+                        variant_grams = str(int(val_numeric))
+                elif volume_value and volume_unit_str:
+                    variant_weight_unit = volume_unit_str
+                    val_numeric = float(volume_value)
+                    if volume_unit_str.lower() == 'l':
+                        variant_grams = str(int(val_numeric * 1000))
+                    else: # Assume ml, treat as grams
+                        variant_grams = str(int(val_numeric))
+            except (ValueError, TypeError):
+                variant_grams = ''
+
             variants_data.append({
                 "Variant SKU": sku, "Option1 Value": get_set_count(sku),
-                "Variant Price": r.get("通常購入販売価格", "").strip(), "Variant Compare At Price": r.get("表示価格", "").strip(),
+                "Variant Price": r.get("通常購入販売価格", "").strip(),
+                "Variant Compare At Price": r.get("表示価格", "").strip(),
                 "Variant Inventory Qty": r.get("在庫数", "0").strip(),
                 CATALOG_ID_SHOPIFY_COLUMN: r.get(CATALOG_ID_RAKUTEN_KEY, ''),
-                "variant_image_src": variant_image_src, "variant_weight_unit": weight_unit or volume_unit or ""
+                "variant_image_src": variant_image_src,
+                "variant_grams": variant_grams,
+                "variant_weight_unit": variant_weight_unit,
             })
-        variants_data.sort(key=lambda v: v['Variant SKU'] != handle); rows_to_write = []
+        
+        variants_data.sort(key=lambda v: v['Variant SKU'] != handle)
+        rows_to_write = []
         product_meta = {key: ";".join(sorted(list(val_set))) for key, val_set in product_meta_sets.items()}
 
         all_variant_skus = [v_data["Variant SKU"] for v_data in variants_data]
@@ -190,8 +225,9 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
                 "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"),
                 "Type": "", "Tags": ",".join(sorted(list(product_tags))), "Published": "true",
                 "Status": "active", "Option1 Name": "Set", "Option1 Value": first_variant["Option1 Value"],
-                "Variant SKU": first_variant["Variant SKU"], "Variant Barcode": "",
-                "Variant Price": first_variant["Variant Price"],
+                "Variant SKU": first_variant["Variant SKU"],
+                "Variant Grams": first_variant["variant_grams"],
+                "Variant Barcode": "", "Variant Price": first_variant["Variant Price"],
                 "Variant Compare At Price": first_variant["Variant Compare At Price"],
                 "Variant Inventory Qty": first_variant["Variant Inventory Qty"],
                 "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny",
@@ -210,6 +246,7 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
             variant_row = {
                 "Handle": handle, "Type": "", "Tags": "", "Option1 Name": "Set",
                 "Option1 Value": v_data["Option1 Value"], "Variant SKU": v_data["Variant SKU"],
+                "Variant Grams": v_data["variant_grams"],
                 "Variant Barcode": "", "Variant Price": v_data["Variant Price"],
                 "Variant Compare At Price": v_data["Variant Compare At Price"],
                 "Variant Inventory Qty": v_data["Variant Inventory Qty"],
@@ -221,10 +258,8 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout:
             }
             rows_to_write.append(variant_row)
         for pos, (src, alt) in enumerate(product_image_list[1:], start=2):
-             image_row = {"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt, "Gift Card": "false"}
-             rows_to_write.append(image_row)
+             rows_to_write.append({"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt, "Gift Card": "false"})
 
-        # Manually format each row for writing using our robust helper
         for row_dict in rows_to_write:
             values_in_order = [row_dict.get(h) for h in HEADER]
             formatted_values = [format_csv_value(val, h) for val, h in zip(values_in_order, HEADER)]
