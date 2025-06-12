@@ -17,7 +17,29 @@ import pandas as pd
 
 # 1. EDIT THIS LIST with the SKUs you want to find.
 SKUS_TO_FIND = [
-    "img58072212",
+    "brailla-pandistelle150",
+    "cosmo-c170",
+    "ginmika-gh-2kg",
+    "ginmika-hh-10kg",
+    "ginmika-hh-2kg",
+    "iseya-005",
+    "nzhaneyl",
+    "nzhaneyl2",
+    "okusuri-punch",
+    "sabatino-zest50g",
+    "sweetmeadow-manuka",
+    "tanigai-kakip",
+    "tsec-001",
+    "tsec-002",
+    "tsec-003",
+    "wcube_bk",
+    "yomatokougei_k06-012-br",
+    "yomatokougei_k06-012-lgr",
+    "yomatokougei_k06-012-rd",
+    "yomatokougei_wcube_color",
+    "yomatokougei_yk04-007-dbw",
+    "yomatokougei_yk04-007-n",
+    "yomatokougei_yk09-100-wh"
     # Add any other SKUs you want to check here
 ]
 
