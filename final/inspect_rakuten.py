@@ -17,8 +17,7 @@ import pandas as pd
 
 # 1. EDIT THIS LIST with the SKUs you want to find.
 SKUS_TO_FIND = [
-    "5t-o0xo-mmot",
-    "5t-o0xo-mmot-3s",
+    "ai-mikan125-30set",
     # Add any other SKUs you want to check here
 ]
 
