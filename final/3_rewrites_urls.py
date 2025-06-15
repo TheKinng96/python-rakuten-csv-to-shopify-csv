@@ -8,14 +8,17 @@ import pandas as pd
 
 # --- Configuration ---
 OUT_DIR = Path("output")
-SHOPIFY_INPUT_FILE = OUT_DIR / "shopify_products.csv"
+SHOPIFY_INPUT_FILE = OUT_DIR / "shopify_products_preview.csv"
 URL_MAP_INPUT_FILE = OUT_DIR / "body_html_image_urls.csv"
 FINAL_SHOPIFY_OUTPUT_FILE = OUT_DIR / "final_shopify_products_ready_for_upload.csv"
 
-# The base URL for your new image paths.
-# OPTION 1: Leave empty ("") to use the recommended Shopify Liquid format.
-# OPTION 2: Use a hardcoded CDN path (e.g., "https://cdn.shopify.com/s/files/1/YOUR_STORE_ID/files/").
-SHOPIFY_FILES_BASE_URL = ""
+# ==============================================================================
+# CORRECTED CONFIGURATION:
+# Set this to your Shopify Files CDN path.
+# IMPORTANT: Make sure it ends with a forward slash /
+# ==============================================================================
+SHOPIFY_FILES_BASE_URL = "https://cdn.shopify.com/s/files/1/0637/6059/7127/files/"
+
 
 def main():
     """Main execution function."""
@@ -35,11 +38,14 @@ def main():
         for _, row in url_map_df.iterrows():
             handle, old_url = row['handle'], row['url']
             original_filename = Path(old_url.split("?")[0]).name
+            # This is the filename created by the download script (e.g., xl-ekjd-8f7a_maruta1.jpg)
             new_filename = f"{handle}_{original_filename}"
             
+            # Since SHOPIFY_FILES_BASE_URL is now set, this block will build the full URL
             if SHOPIFY_FILES_BASE_URL:
                 replacement_map[old_url] = f"{SHOPIFY_FILES_BASE_URL}{new_filename}"
             else:
+                # This block is for the Liquid format, which will now be skipped
                 replacement_map[old_url] = f"{{{{ '{new_filename}' | file_url }}}}"
         
         if not replacement_map:
