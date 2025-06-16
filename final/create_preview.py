@@ -5,22 +5,15 @@ This script correctly reads the full CSV and creates a preview containing
 the first N complete products, including all their multi-line variant and
 image rows.
 
-It achieves this by:
-1. Using pandas to efficiently identify the first N product handles.
-2. Manually parsing the source file record-by-record, correctly handling
-   multi-line fields by counting quotes.
-3. Writing the raw, unmodified text for each matching record, perfectly
-   preserving all original formatting like `""`.
-
 Usage:
-  python scripts/create_preview.py
+  python create_preview.py
 """
 
 from pathlib import Path
 import pandas as pd
 
 # --- Configuration ---
-INPUT_FILE = Path("output/final_shopify_products_ready_for_upload.csv")
+INPUT_FILE = Path("output/4_final_sorted_products.csv")
 PREVIEW_FILE = Path("output/shopify_products_preview.csv")
 NUM_PRODUCTS = 20  # The number of unique products (Handles) to include
 
@@ -33,15 +26,21 @@ def create_preview_csv():
 
     try:
         # STEP 1: Use pandas to efficiently find the target handles.
-        # This is fast as it only loads the 'Handle' column into memory.
         print(f"Identifying the first {NUM_PRODUCTS} products from '{INPUT_FILE}'...")
-        df_handles = pd.read_csv(INPUT_FILE, usecols=['Handle'], dtype=str)
-        unique_handles = df_handles['Handle'].unique()
-        target_handles = set(unique_handles[:NUM_PRODUCTS]) # Use a Set for fast lookups
+        # Read the 'Handle' column and drop any empty/NA values before finding unique ones
+        df_handles = pd.read_csv(INPUT_FILE, usecols=['Handle'], dtype=str).dropna()
+        # Get unique handles in the order they appear
+        unique_handles_ordered = df_handles['Handle'].unique()
+        # Create a set of the first N handles for fast lookups
+        target_handles = set(unique_handles_ordered[:NUM_PRODUCTS])
 
         if not target_handles:
             print("Warning: No product handles found in the input file.")
-            PREVIEW_FILE.write_text("")
+            # Ensure the preview file is created but empty
+            with open(PREVIEW_FILE, 'w', encoding='utf-8') as fout:
+                # Get the header from the original file
+                with open(INPUT_FILE, 'r', encoding='utf-8') as fin:
+                    fout.write(fin.readline())
             return
 
         # STEP 2: Manually parse the file to copy full, multi-line records.
@@ -57,21 +56,35 @@ def create_preview_csv():
             lines_written += 1
 
             record_buffer = []
+            is_copying_current_product = False # Flag to track if we're in a target product block
+
             for line in fin:
                 record_buffer.append(line)
 
                 # A valid CSV record is complete when it has an even number of quotes.
-                # An odd number indicates a field is open and contains a newline.
-                # We join the buffer to correctly count quotes across line breaks.
                 full_record_text = "".join(record_buffer)
                 
                 if full_record_text.count('"') % 2 == 0:
                     # We have a complete record. Now, check its handle.
-                    # The handle is always in the first line of the record.
-                    handle = record_buffer[0].split(',', 1)[0]
+                    first_line_of_record = record_buffer[0]
                     
-                    if handle in target_handles:
-                        # Write the verbatim record and count the lines it contained.
+                    # Split safely, handling potential empty strings
+                    parts = first_line_of_record.split(',', 1)
+                    handle = parts[0].strip('"') if parts else ""
+
+                    if handle:
+                        # This is a new product's main row. Decide if we should start copying.
+                        if handle in target_handles:
+                            is_copying_current_product = True
+                        else:
+                            # We've hit a product that is NOT a target, so stop copying.
+                            # This is especially important to stop after the Nth product.
+                            is_copying_current_product = False
+                    
+                    # If the flag is set, it means we are in a block that should be copied.
+                    # This applies to the main row of a target product AND all its
+                    # subsequent variant/image rows (which have blank handles).
+                    if is_copying_current_product:
                         fout.write(full_record_text)
                         lines_written += len(record_buffer)
 
