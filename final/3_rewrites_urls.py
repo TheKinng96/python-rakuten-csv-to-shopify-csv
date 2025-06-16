@@ -8,7 +8,7 @@ import pandas as pd
 
 # --- Configuration ---
 OUT_DIR = Path("output")
-SHOPIFY_INPUT_FILE = OUT_DIR / "shopify_products_preview.csv"
+SHOPIFY_INPUT_FILE = OUT_DIR / "shopify_products.csv"
 URL_MAP_INPUT_FILE = OUT_DIR / "body_html_image_urls.csv"
 FINAL_SHOPIFY_OUTPUT_FILE = OUT_DIR / "final_shopify_products_ready_for_upload.csv"
 
