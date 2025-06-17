@@ -15,7 +15,7 @@ import pandas as pd
 # --- Configuration ---
 INPUT_FILE = Path("output/4_final_sorted_products.csv")
 PREVIEW_FILE = Path("output/shopify_products_preview.csv")
-NUM_PRODUCTS = 20  # The number of unique products (Handles) to include
+NUM_PRODUCTS = 200  # The number of unique products (Handles) to include
 
 def create_preview_csv():
     """Reads the full CSV and writes a verbatim preview of the first N products."""

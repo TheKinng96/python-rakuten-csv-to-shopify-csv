@@ -33,6 +33,17 @@ SPECIAL_TAGS: dict[str, str] = {
 FREE_TAG_KEYS = {"食品配送状態", "セット種別"}
 SPECIAL_QUOTED_EMPTY_FIELDS = {'Type', 'Tags', 'Variant Barcode'}
 
+CATEGORY_EXCLUSION_LIST = {
+    "食品",
+    "飲料・ドリンク",
+    "調味料",
+    "お酒・ワイン",
+    "ヘルス・ビューティー",
+    "サプリメント・ダイエット・健康",
+    "ホーム・キッチン",
+    "ペットフード・ペット用品"
+}
+
 print("[1/5] Loading static resources…")
 # (File loading sections are unchanged)
 try:
@@ -341,9 +352,16 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
         product_meta = {key: "\n".join(sorted(list(val_set))) for key, val_set in product_meta_sets.items()}
         all_variant_skus = [v_data["Variant SKU"] for v_data in variants_data]
         all_paths = [path for sku in all_variant_skus for path in collection_map.get(sku, [])]
+        
+        # 1. Get all unique category components from the paths
         unique_components = {comp.strip() for path in all_paths if "\\" in path for comp in path.split('\\')[1:]}
-        if unique_components:
-            product_meta["商品カテゴリー (product.metafields.custom.attributes)"] = "\n".join(sorted(list(unique_components)))
+        
+        # 2. Filter out any components that are in our exclusion list
+        filtered_components = {comp for comp in unique_components if comp not in CATEGORY_EXCLUSION_LIST}
+        
+        # 3. If there are any components left after filtering, create the metafield
+        if filtered_components:
+            product_meta["商品カテゴリー (product.metafields.custom.attributes)"] = "\n".join(sorted(list(filtered_components)))
 
         if variants_data:
             first_variant = variants_data[0]

@@ -27,6 +27,7 @@ COLUMNS_TO_ANALYZE = [
     "こだわり・認証 (product.metafields.custom.commitment)",
     "ご当地 (product.metafields.custom.area)",
     "商品カテゴリー (product.metafields.custom.attributes)",
+    "味・香り・フレーバー (product.metafields.custom.flavor)"
 ]
 
 # --- Output File ---
