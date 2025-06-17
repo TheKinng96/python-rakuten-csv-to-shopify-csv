@@ -1,156 +1,127 @@
+# file: split_csv.py
 """
-Utilities for manipulating large Shopify CSV exports.
+Splits a large Shopify CSV into multiple smaller files based on product count.
 
-This script contains functions to:
-1.  create_preview_csv: Create a preview of the first N products.
-2.  split_csv_by_rows: Split a large CSV into smaller files with a specified
-    number of rows, while correctly handling multi-line records.
+This script efficiently reads a large CSV only once, splitting it into multiple
+output files. Each output file contains a specific number of complete products,
+including all their multi-line variant and image rows, ensuring data integrity.
 
-The key method for both is manually parsing the source file record-by-record,
-correctly handling multi-line fields by counting quotes to determine the
-end of a full record.
+This version correctly handles product groups, ensuring that a product's main
+row and all its child rows (variants, images) are kept together and never
+split across two files.
+
+Usage:
+  python split_csv.py
 """
-import sys
+
 from pathlib import Path
-import pandas as pd
+import sys
 
-# --- Configuration for the NEW function ---
-# You can change these values to test the new function
-INPUT_FILE = Path("output/shopify_products.csv")
-OUTPUT_DIR = Path("output/split_files_processed/")
-ROWS_PER_FILE = 10000  # The target number of rows per output file
+# --- Configuration ---
+INPUT_FILE = Path("output/4_final_sorted_products.csv")
+OUTPUT_DIR = Path("output/split_by_product/")
+PRODUCTS_PER_FILE = 1000  # The number of unique products to include in each split file
 
-# --- Original function (for reference) ---
-def create_preview_csv_original():
-    """Reads the full CSV and writes a verbatim preview of the first 20 products."""
-    PREVIEW_FILE = Path("output/shopify_products_preview.csv")
-    NUM_PRODUCTS = 1000
-
-    if not INPUT_FILE.exists():
-        print(f"Error: Input file not found at '{INPUT_FILE}'")
-        return
-
-    try:
-        print(f"Identifying the first {NUM_PRODUCTS} products from '{INPUT_FILE}'...")
-        df_handles = pd.read_csv(INPUT_FILE, usecols=['Handle'], dtype=str)
-        unique_handles = df_handles['Handle'].unique()
-        target_handles = set(unique_handles[:NUM_PRODUCTS])
-
-        if not target_handles:
-            print("Warning: No product handles found in the input file.")
-            PREVIEW_FILE.write_text("")
-            return
-
-        print(f"Copying all rows for {len(target_handles)} products to '{PREVIEW_FILE}'...")
-        lines_written = 0
-        with open(INPUT_FILE, 'r', encoding='utf-8') as fin, \
-             open(PREVIEW_FILE, 'w', encoding='utf-8') as fout:
-            header = fin.readline()
-            fout.write(header)
-            lines_written += 1
-            record_buffer = []
-            for line in fin:
-                record_buffer.append(line)
-                full_record_text = "".join(record_buffer)
-                if full_record_text.count('"') % 2 == 0:
-                    handle = record_buffer[0].split(',', 1)[0]
-                    if handle in target_handles:
-                        fout.write(full_record_text)
-                        lines_written += len(record_buffer)
-                    record_buffer = []
-        print(f"Done. Wrote {lines_written} total lines to '{PREVIEW_FILE}'.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-# --- UPDATED FUNCTION ---
-def split_csv_by_rows(input_path: Path, output_dir: Path, rows_per_file: int, output_prefix: str = "part"):
+def split_csv_by_products_robustly(input_path: Path, output_dir: Path, products_per_file: int):
     """
-    Splits a large CSV file into smaller files based on a specified number of rows.
-
-    This function correctly handles multi-line CSV fields, ensuring that a single
-    record (like a product with its variants) is never split across two files.
-
-    Args:
-        input_path (Path): The path to the large source CSV file.
-        output_dir (Path): The directory where the split files will be saved.
-        rows_per_file (int): The target number of data rows for each split file.
-        output_prefix (str): The prefix for the output filenames (e.g., "part").
+    Reads a large Shopify CSV in a single pass and splits it into multiple
+    files, ensuring that all rows for a given product stay together.
     """
     if not input_path.exists():
-        print(f"Error: Input file not found at '{input_path}'")
+        print(f"Error: Input file not found at '{input_path}'", file=sys.stderr)
         return
 
-    # Create the output directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Splitting '{input_path}' into files with ~{rows_per_file} rows each.")
-    print(f"Output will be saved in: '{output_dir}'")
+    if products_per_file <= 0:
+        print(f"Error: PRODUCTS_PER_FILE must be a positive integer.", file=sys.stderr)
+        return
 
-    fout = None  # Holds the current output file handle
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         with open(input_path, 'r', encoding='utf-8') as fin:
             header = fin.readline()
-            if not header:
-                print("Error: Input file is empty.")
+            if not header.strip():
+                print("Error: Input file is empty or has no header.", file=sys.stderr)
                 return
 
+            # --- State for the streaming split process ---
+            output_file = None
             file_count = 0
-            rows_in_current_file = 0
-            total_lines_processed = 1 # Start with 1 for the header
+            products_in_current_file = 0
+            last_seen_handle = None
+            total_records_written = 0
+
+            # Buffer to hold lines for a single, potentially multi-line, record
             record_buffer = []
 
+            print(f"Starting robust split of '{input_path.name}'...")
+            print(f"Each file will contain up to {products_per_file} products.")
+
+            # --- Main loop to process the file record by record ---
             for line in fin:
-                total_lines_processed += 1
                 record_buffer.append(line)
 
-                # A valid CSV record is complete when it has an even number of quotes.
-                full_record_text = "".join(record_buffer)
-                if full_record_text.count('"') % 2 == 0:
-                    # We have a complete record. Now decide where to write it.
+                # A complete CSV record/row will have an even number of quotation marks.
+                # This correctly groups multi-line fields (like HTML descriptions).
+                if "".join(record_buffer).count('"') % 2 == 0:
+                    # --- We have a complete record ---
+                    full_record_text = "".join(record_buffer)
+                    record_buffer = [] # Clear buffer for the next record
 
-                    # If we need to start a new file (it's the first record, or the current file is full)
-                    if fout is None or rows_in_current_file >= rows_per_file:
-                        if fout:
-                            fout.close()
-                            print(f"  -> Finished writing part_{file_count}.csv with {rows_in_current_file} rows.")
+                    # Get handle from the first column. It's empty for variant/image rows.
+                    current_handle = full_record_text.split(',', 1)[0].strip('"')
+                    is_new_product = bool(current_handle and current_handle != last_seen_handle)
 
-                        file_count += 1
-                        output_path = output_dir / f"{output_prefix}_{file_count}.csv"
-                        fout = open(output_path, 'w', encoding='utf-8')
-                        fout.write(header)
-                        rows_in_current_file = 0
+                    # *** CRUCIAL LOGIC BLOCK ***
+                    # We decide whether to switch files *before* processing the current record.
+                    # This check happens ONLY when we detect a brand-new product.
+                    if is_new_product:
+                        # If the current file is full, close it and prepare to open a new one.
+                        if products_in_current_file >= products_per_file:
+                            if output_file:
+                                output_file.close()
+                                print(f"  -> Completed '{output_filename.name}' with {products_in_current_file} products.")
+                            output_file = None  # Mark that a new file is needed
+                            products_in_current_file = 0
 
-                    # Write the complete record to the current output file
-                    fout.write(full_record_text)
-                    rows_in_current_file += len(record_buffer)
+                        # If no file is open (either it's the very start or we just closed one),
+                        # create the new file now.
+                        if output_file is None:
+                            file_count += 1
+                            output_filename = output_dir / f"part_{file_count}.csv"
+                            print(f"\nCreating new file: '{output_filename.name}'")
+                            output_file = open(output_filename, 'w', encoding='utf-8')
+                            output_file.write(header)
 
-                    # Reset the buffer for the next record
-                    record_buffer = []
+                        # A new product has been identified, so we update our state.
+                        products_in_current_file += 1
+                        last_seen_handle = current_handle
 
-            if fout:
-                print(f"  -> Finished writing part_{file_count}.csv with {rows_in_current_file} rows.")
+                    # --- Write the record to the currently open file ---
+                    # This happens for EVERY record (main product, variant, or image).
+                    if output_file:
+                        output_file.write(full_record_text)
+                        total_records_written += 1
+                    elif not file_count:
+                        # This case handles files with no valid product rows after the header
+                        print("Warning: Skipping rows found before the first valid product Handle.", file=sys.stderr)
 
-        print(f"\nDone. Processed {total_lines_processed} total lines from the input file.")
-        print(f"Created {file_count} split file(s) in '{output_dir}'.")
+            # --- After the loop, close the last open file ---
+            if output_file and not output_file.closed:
+                output_file.close()
+                print(f"  -> Completed '{output_filename.name}' with {products_in_current_file} products.")
+
+            if total_records_written == 0:
+                print("\nWarning: No data rows were found or written after the header.")
+            else:
+                print(f"\nDone. Split the input into {file_count} file(s) in '{output_dir.resolve()}'.")
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
-    finally:
-        # Ensure the last file handle is always closed
-        if fout and not fout.closed:
-            fout.close()
 
 if __name__ == "__main__":
-    # This block demonstrates how to use the new function.
-    # To run it, save the code as a Python file (e.g., `process_csv.py`)
-    # and execute `python process_csv.py` from your terminal.
-
-    # Make sure INPUT_FILE exists and OUTPUT_DIR is where you want the files.
-    if not INPUT_FILE.exists():
-        print(f"Error: The input file '{INPUT_FILE}' was not found.")
-        print("Please create a dummy file or point it to your actual CSV.")
-    else:
-        split_csv_by_rows(
-            input_path=INPUT_FILE,
-            output_dir=OUTPUT_DIR,
-            rows_per_file=ROWS_PER_FILE
-        )
+    split_csv_by_products_robustly(
+        input_path=INPUT_FILE,
+        output_dir=OUTPUT_DIR,
+        products_per_file=PRODUCTS_PER_FILE
+    )
