@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 # --- Configuration ---
-INPUT_FILE = Path("output/4_final_sorted_products.csv")
+INPUT_FILE = Path("output/shopify_products.csv")
 PREVIEW_FILE = Path("output/shopify_products_preview.csv")
 NUM_PRODUCTS = 200  # The number of unique products (Handles) to include
 

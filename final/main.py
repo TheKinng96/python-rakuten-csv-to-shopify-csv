@@ -111,130 +111,71 @@ def format_csv_value(value, header_name):
     return s_value
 
 # ===========================================================================
-# REFINED HTML CLEANING FUNCTION (Updated)
+# REFINED HTML CLEANING FUNCTION (Unchanged)
 # ===========================================================================
 def clean_body_html(html_content: str) -> str:
-    """
-    Parses HTML content and removes specific promotional or redundant sections.
-    """
-    if not html_content or not html_content.strip():
-        return ""
-
+    # This function remains unchanged
+    if not html_content or not html_content.strip(): return ""
     try:
         soup = BeautifulSoup(html_content, 'lxml')
-
-        # === STAGE 1: REMOVE SPECIFIC BLOCKS AND LINKS ===
-
-        # Rule 1 & 2: Remove simple links based on their text content.
-        link_text_patterns_to_remove = [
-            re.compile(r"この商品のお買い得なセットはこちらから"),
-            re.compile(r"その他の商品はこちらから"),
-        ]
+        link_text_patterns_to_remove = [re.compile(r"この商品のお買い得なセットはこちらから"), re.compile(r"その他の商品はこちらから")]
         for pattern in link_text_patterns_to_remove:
-            for tag in soup.find_all('a', string=pattern):
-                tag.decompose()
-
-        # Rule 3 & 4 & others: Remove entire blocks based on header text.
-        block_text_patterns_to_remove = [
-            re.compile(r"よく一緒に購入されている商品はこちら"),
-            re.compile(r"類似商品はこちら"),
-            re.compile(r"再入荷しました"),
-        ]
+            for tag in soup.find_all('a', string=pattern): tag.decompose()
+        block_text_patterns_to_remove = [re.compile(r"よく一緒に購入されている商品はこちら"), re.compile(r"類似商品はこちら"), re.compile(r"再入荷しました")]
         BLOCK_TAGS = ['div', 'table', 'section', 'p', 'tr']
         for pattern in block_text_patterns_to_remove:
             element = soup.find(string=pattern)
             if element:
                 parent_block = element.find_parent(BLOCK_TAGS)
-                if parent_block:
-                    parent_block.decompose()
-
-        # Rule 5: Remove bookmark links (my.bookmark.rakuten.co.jp) and their parent div.
+                if parent_block: parent_block.decompose()
         for link in list(soup.find_all('a', href=re.compile(r"my\.bookmark\.rakuten\.co\.jp"))):
             container = link.find_parent('div')
             if container:
                 for br in list(container.find_previous_siblings()):
-                    if (isinstance(br, Tag) and br.name != 'br') or \
-                       (not isinstance(br, Tag) and str(br).strip()):
-                        break
-                    if isinstance(br, Tag) and br.name == 'br':
-                        br.decompose()
+                    if (isinstance(br, Tag) and br.name != 'br') or (not isinstance(br, Tag) and str(br).strip()): break
+                    if isinstance(br, Tag) and br.name == 'br': br.decompose()
                 container.decompose()
-            else:
-                link.decompose()
-
-        # Rule 6: Handle internal item/search links with special logic for tables.
+            else: link.decompose()
         href_pattern = re.compile(r"(item|search)\.rakuten\.co\.jp")
         for link in list(soup.find_all('a', href=href_pattern)):
             if link.find_parent('table'):
                 next_sib = link.find_next_sibling()
-                if next_sib and isinstance(next_sib, Tag) and next_sib.name == 'img':
-                    next_sib.decompose()
+                if next_sib and isinstance(next_sib, Tag) and next_sib.name == 'img': next_sib.decompose()
                 for br in list(link.find_previous_siblings()):
-                    if (isinstance(br, Tag) and br.name != 'br') or \
-                       (not isinstance(br, Tag) and str(br).strip()):
-                        break
-                    if isinstance(br, Tag) and br.name == 'br':
-                        br.decompose()
+                    if (isinstance(br, Tag) and br.name != 'br') or (not isinstance(br, Tag) and str(br).strip()): break
+                    if isinstance(br, Tag) and br.name == 'br': br.decompose()
                 link.decompose()
             else:
                 parent_container = link.find_parent(['div', 'li', 'p'])
-                if parent_container:
-                    parent_container.decompose()
-                else:
-                    link.decompose()
-        
-        # *** NEW RULE 8: Remove specific decorative image and its surrounding <br> tags. ***
+                if parent_container: parent_container.decompose()
+                else: link.decompose()
         target_img_src = "https://image.rakuten.co.jp/tsutsu-uraura/cabinet/souryou_0301/2200okinawar3.jpg"
         for img in list(soup.find_all('img', src=target_img_src)):
-            # Remove all consecutive <br> tags and whitespace before the image
             for prev_sibling in list(img.find_previous_siblings()):
-                # Check if the sibling is a <br> tag or just whitespace text
-                if (isinstance(prev_sibling, Tag) and prev_sibling.name == 'br') or \
-                   (not isinstance(prev_sibling, Tag) and not str(prev_sibling).strip()):
-                    prev_sibling.decompose()
-                else:
-                    # Stop as soon as we hit any other content
-                    break
-
-            # Remove all consecutive <br> tags and whitespace after the image
+                if (isinstance(prev_sibling, Tag) and prev_sibling.name == 'br') or (not isinstance(prev_sibling, Tag) and not str(prev_sibling).strip()): prev_sibling.decompose()
+                else: break
             for next_sibling in list(img.find_next_siblings()):
-                if (isinstance(next_sibling, Tag) and next_sibling.name == 'br') or \
-                   (not isinstance(next_sibling, Tag) and not str(next_sibling).strip()):
-                    next_sibling.decompose()
-                else:
-                    break
-            
-            # Finally, remove the image itself
+                if (isinstance(next_sibling, Tag) and next_sibling.name == 'br') or (not isinstance(next_sibling, Tag) and not str(next_sibling).strip()): next_sibling.decompose()
+                else: break
             img.decompose()
-
-        # Rule 7: Clean up remnant containers (tables, centers) that only have images left.
         while True:
             removed_something = False
             for container in list(soup.find_all(['table', 'center'])):
-                has_no_text = not container.get_text(strip=True)
-                has_image = container.find('img')
-                if has_no_text and has_image:
+                if not container.get_text(strip=True) and container.find('img'):
                     container.decompose()
                     removed_something = True
-            if not removed_something:
-                break
-
-        # === STAGE 2: TRUNCATE DOCUMENT AT MARKER COMMENT ===
+            if not removed_something: break
         start_comment = soup.find(string=lambda text: isinstance(text, Comment) and 'EC-UP_Favorite_1_START' in text)
         if start_comment:
-            for node in list(start_comment.find_all_next()):
-                node.decompose()
+            for node in list(start_comment.find_all_next()): node.decompose()
             start_comment.decompose()
-
         return str(soup)
-
     except Exception as e:
         print(f"  - Warning: Could not parse/clean HTML for a product. Error: {e}")
         return html_content
 
 # ---------------------------------------------------------------------------
 # Pre-processing Stage (Unchanged)
-# ... (The rest of your script remains exactly the same) ...
 # ---------------------------------------------------------------------------
 print("[2/5] Pre-processing & merging Rakuten item data…")
 OUT_DIR.mkdir(exist_ok=True); rejected_rows_log = []
@@ -275,21 +216,16 @@ print(f"  - Cleaned version will be saved to '{OUT_FILE}'")
 print(f"  - Uncleaned version will be saved to '{ORIGINAL_HTML_OUT_FILE}'")
 print(f"  - HTML comparison log will be saved to '{HTML_COMPARISON_LOG}'")
 
-# Open all three output files at once
 with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
      open(ORIGINAL_HTML_OUT_FILE, "w", newline="", encoding="utf-8") as fout_orig, \
      open(HTML_COMPARISON_LOG, "w", newline="", encoding="utf-8") as flog:
 
-    # Set up writers for all files
     fout.write(",".join(HEADER) + "\n")
     fout_orig.write(",".join(HEADER) + "\n")
-
-    log_fieldnames = ['Handle', 'Original Body (HTML)', 'Cleaned Body (HTML)']
-    log_writer = csv.DictWriter(flog, fieldnames=log_fieldnames)
+    log_writer = csv.DictWriter(flog, fieldnames=['Handle', 'Original Body (HTML)', 'Cleaned Body (HTML)'])
     log_writer.writeheader()
 
     for handle, product_group in processed_df.groupby('Handle'):
-        # (This section is identical to before, gathering all data)
         product_meta_sets: dict[str, set[str]] = {}; product_tags: set[str] = set(); product_images_seen = set(); product_image_list = []; variants_data: list[dict] = []
         main_product_row = product_group[product_group['SKU'] == handle].iloc[0] if not product_group[product_group['SKU'] == handle].empty else product_group.iloc[0]
         for _, r in product_group.iterrows():
@@ -301,26 +237,45 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
                     if src not in product_images_seen:
                         alt = r.get(f"商品画像名（ALT）{n}", "").strip(); product_image_list.append((src, alt)); product_images_seen.add(src)
             
+            # --- MODIFICATION START: Generalized Pipe (|) Splitting Logic ---
             for i in range(1, 101):
                 k = r.get(f"商品属性（項目）{i}", "").strip()
-                v = r.get(f"商品属性（値）{i}", "").strip()
+                v_raw = r.get(f"商品属性（値）{i}", "").strip()
                 
-                if not k or not v or v == '-':
+                if not k or not v_raw or v_raw == '-':
                     continue
 
-                unit = r.get(f"商品属性（単位）{i}", "").strip()
-                if k == '総重量' and v and unit: weight_value, weight_unit_str = v, unit
-                elif k == '総容量' and v and unit: volume_value, volume_unit_str = v, unit
-                if k in SPECIAL_TAGS: product_tags.add(SPECIAL_TAGS[k]); continue
-                if k in FREE_TAG_KEYS: product_tags.add(v); continue
-                
-                dest = META_MAP.get(k)
-                if dest:
-                    value_to_append = v
-                    if dest == "容量・サイズ(product.metafields.custom.size)" and unit: value_to_append += unit
-                    product_meta_sets.setdefault(dest, set()).add(value_to_append)
-                else:
-                    product_meta_sets.setdefault("その他 (product.metafields.custom.etc)", set()).add(f"{k}:{v}")
+                # These specific keys should never be split as they are numeric
+                if k == '総重量':
+                    weight_value, weight_unit_str = v_raw, r.get(f"商品属性（単位）{i}", "").strip()
+                    continue
+                if k == '総容量':
+                    volume_value, volume_unit_str = v_raw, r.get(f"商品属性（単位）{i}", "").strip()
+                    continue
+
+                # Create a list of values to process. Split if pipe exists, otherwise it's a list of one.
+                values_to_process = [item.strip() for item in v_raw.split('|') if item.strip()]
+
+                # Now, process each value from the list
+                for v in values_to_process:
+                    if k in SPECIAL_TAGS: 
+                        product_tags.add(SPECIAL_TAGS[k])
+                        continue # Use continue inside to avoid double-processing
+                    
+                    if k in FREE_TAG_KEYS:
+                        product_tags.add(v)
+                        continue
+
+                    dest = META_MAP.get(k)
+                    if dest:
+                        value_to_append = v
+                        unit = r.get(f"商品属性（単位）{i}", "").strip()
+                        if dest == "容量・サイズ(product.metafields.custom.size)" and unit:
+                            value_to_append += unit
+                        product_meta_sets.setdefault(dest, set()).add(value_to_append)
+                    else:
+                        product_meta_sets.setdefault("その他 (product.metafields.custom.etc)", set()).add(f"{k}:{v}")
+            # --- MODIFICATION END ---
 
             variant_grams = ''; variant_weight_unit = ''
             try:
@@ -334,17 +289,11 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
                     else: variant_grams = str(int(float(volume_value)))
             except (ValueError, TypeError): variant_grams = ''
             
-            # This part correctly gets the quantity for EACH variant row 'r'
             variants_data.append({
-                "Variant SKU": sku, 
-                "Option1 Value": get_set_count(sku), 
-                "Variant Price": r.get("通常購入販売価格", "").strip(), 
-                "Variant Compare At Price": r.get("表示価格", "").strip(), 
-                "Variant Inventory Qty": r.get("在庫数", "0").strip(), 
-                CATALOG_ID_SHOPIFY_COLUMN: r.get(CATALOG_ID_RAKUTEN_KEY, ''), 
-                "variant_image_src": variant_image_src, 
-                "variant_grams": variant_grams, 
-                "variant_weight_unit": variant_weight_unit
+                "Variant SKU": sku, "Option1 Value": get_set_count(sku), "Variant Price": r.get("通常購入販売価格", "").strip(), 
+                "Variant Compare At Price": r.get("表示価格", "").strip(), "Variant Inventory Qty": r.get("在庫数", "0").strip(), 
+                CATALOG_ID_SHOPIFY_COLUMN: r.get(CATALOG_ID_RAKUTEN_KEY, ''), "variant_image_src": variant_image_src, 
+                "variant_grams": variant_grams, "variant_weight_unit": variant_weight_unit
             })
         
         variants_data.sort(key=lambda v: v['Variant SKU'] != handle)
@@ -353,13 +302,10 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
         all_variant_skus = [v_data["Variant SKU"] for v_data in variants_data]
         all_paths = [path for sku in all_variant_skus for path in collection_map.get(sku, [])]
         
-        # 1. Get all unique category components from the paths
         unique_components = {comp.strip() for path in all_paths if "\\" in path for comp in path.split('\\')[1:]}
-        
-        # 2. Filter out any components that are in our exclusion list
+        excluded_types = {comp for comp in unique_components if comp in CATEGORY_EXCLUSION_LIST}
         filtered_components = {comp for comp in unique_components if comp not in CATEGORY_EXCLUSION_LIST}
-        
-        # 3. If there are any components left after filtering, create the metafield
+        product_type_string = sorted(list(excluded_types))[0] if excluded_types else ""
         if filtered_components:
             product_meta["商品カテゴリー (product.metafields.custom.attributes)"] = "\n".join(sorted(list(filtered_components)))
 
@@ -372,79 +318,39 @@ with open(OUT_FILE, "w", newline="", encoding="utf-8") as fout, \
                 log_writer.writerow({'Handle': handle, 'Original Body (HTML)': raw_html_body, 'Cleaned Body (HTML)': cleaned_html_body})
 
             main_row = {
-                "Handle": handle, 
-                "Title": main_product_row.get("商品名", ""), 
-                "Body (HTML)": cleaned_html_body, 
-                "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), 
-                "Type": "", 
-                "Tags": ",".join(sorted(list(product_tags))), 
-                "Published": "true", 
-                "Status": "active", 
-                "Option1 Name": "セット", 
-                "Option1 Value": first_variant["Option1 Value"], 
-                "Variant SKU": first_variant["Variant SKU"], 
-                "Variant Grams": first_variant["variant_grams"], 
-                "Variant Barcode": "", 
-                "Variant Price": first_variant["Variant Price"], 
-                "Variant Compare At Price": first_variant["Variant Compare At Price"], 
-                # <<< CORRECTED HERE: Use the value from the prepared 'first_variant' dictionary.
-                "Variant Inventory Qty": first_variant["Variant Inventory Qty"], 
-                "Variant Inventory Tracker": "shopify", 
-                "Variant Inventory Policy": "deny", 
-                "Variant Fulfillment Service": "manual", 
-                "Variant Requires Shipping": "true", 
-                "Variant Taxable": "true", 
-                "Variant Weight Unit": first_variant["variant_weight_unit"],
-                "Variant Image": first_variant["variant_image_src"],
-                CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], 
-                "Gift Card": "false"
+                "Handle": handle, "Title": main_product_row.get("商品名", ""), "Body (HTML)": cleaned_html_body, 
+                "Vendor": main_product_row.get("ブランド名", "tsutsu-uraura"), "Type": product_type_string,
+                "Tags": ",".join(sorted(list(product_tags))), "Published": "true", "Status": "active", "Option1 Name": "セット", 
+                "Option1 Value": first_variant["Option1 Value"], "Variant SKU": first_variant["Variant SKU"], 
+                "Variant Grams": first_variant["variant_grams"], "Variant Barcode": "", "Variant Price": first_variant["Variant Price"], 
+                "Variant Compare At Price": first_variant["Variant Compare At Price"], "Variant Inventory Qty": first_variant["Variant Inventory Qty"], 
+                "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", 
+                "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": first_variant["variant_weight_unit"],
+                "Variant Image": first_variant["variant_image_src"], CATALOG_ID_SHOPIFY_COLUMN: first_variant[CATALOG_ID_SHOPIFY_COLUMN], "Gift Card": "false"
             }
             main_row.update(product_meta)
             if product_image_list:
-                main_row["Image Src"] = product_image_list[0][0]
-                main_row["Image Position"] = 1
-                main_row["Image Alt Text"] = product_image_list[0][1]
+                main_row["Image Src"] = product_image_list[0][0]; main_row["Image Position"] = 1; main_row["Image Alt Text"] = product_image_list[0][1]
             rows_to_write.append(main_row)
 
             for v_data in variants_data[1:]:
-                # This part was already correct, using v_data for each subsequent variant.
                 rows_to_write.append({
-                    "Handle": handle, 
-                    "Type": "", 
-                    "Tags": "", 
-                    "Option1 Name": "セット", 
-                    "Option1 Value": v_data["Option1 Value"], 
-                    "Variant SKU": v_data["Variant SKU"], 
-                    "Variant Grams": v_data["variant_grams"], 
-                    "Variant Barcode": "", 
-                    "Variant Price": v_data["Variant Price"], 
-                    "Variant Compare At Price": v_data["Variant Compare At Price"], 
-                    "Variant Inventory Qty": v_data["Variant Inventory Qty"], 
-                    "Variant Inventory Tracker": "shopify", 
-                    "Variant Inventory Policy": "deny", 
-                    "Variant Fulfillment Service": "manual", 
-                    "Variant Requires Shipping": "true", 
-                    "Variant Taxable": "true", 
-                    "Variant Weight Unit": v_data["variant_weight_unit"], 
-                    CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], 
-                    "Variant Image": v_data["variant_image_src"], 
-                    "Gift Card": "false"
+                    "Handle": handle, "Type": "", "Tags": "", "Option1 Name": "セット", "Option1 Value": v_data["Option1 Value"], 
+                    "Variant SKU": v_data["Variant SKU"], "Variant Grams": v_data["variant_grams"], "Variant Barcode": "", "Variant Price": v_data["Variant Price"], 
+                    "Variant Compare At Price": v_data["Variant Compare At Price"], "Variant Inventory Qty": v_data["Variant Inventory Qty"], 
+                    "Variant Inventory Tracker": "shopify", "Variant Inventory Policy": "deny", "Variant Fulfillment Service": "manual", 
+                    "Variant Requires Shipping": "true", "Variant Taxable": "true", "Variant Weight Unit": v_data["variant_weight_unit"], 
+                    CATALOG_ID_SHOPIFY_COLUMN: v_data[CATALOG_ID_SHOPIFY_COLUMN], "Variant Image": v_data["variant_image_src"], "Gift Card": "false"
                 })
             for pos, (src, alt) in enumerate(product_image_list[1:], start=2):
                  rows_to_write.append({"Handle": handle, "Image Src": src, "Image Position": pos, "Image Alt Text": alt, "Gift Card": "false"})
 
-            # --- Write to both main files ---
-            # 1. Write the cleaned version to the primary file
             for row_dict in rows_to_write:
                 values_in_order = [row_dict.get(h) for h in HEADER]
                 formatted_values = [format_csv_value(val, h) for val, h in zip(values_in_order, HEADER)]
                 fout.write(",".join(formatted_values) + "\n")
-
-            # 2. Modify the data in memory to use the original HTML
             if rows_to_write:
                 rows_to_write[0]['Body (HTML)'] = raw_html_body
-
-            # 3. Write the now-uncleaned version to the secondary file
             for row_dict in rows_to_write:
                 values_in_order = [row_dict.get(h) for h in HEADER]
                 formatted_values = [format_csv_value(val, h) for val, h in zip(values_in_order, HEADER)]
