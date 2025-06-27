@@ -18,7 +18,7 @@ from pathlib import Path
 import sys
 
 # --- Configuration ---
-INPUT_FILE = Path("output/4_final_sorted_products.csv")
+INPUT_FILE = Path("output/shopify_products_with_types.csv")
 OUTPUT_DIR = Path("output/split_by_product/")
 PRODUCTS_PER_FILE = 1000  # The number of unique products to include in each split file
 

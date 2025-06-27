@@ -18,12 +18,12 @@ import csv
 
 # 1. EDIT THIS LIST with the Handles you want to find.
 HANDLES_TO_FIND = [
-    "5t-o0xo-mmot",
+    "1o-dg74-rfa9",
     # Add any other Handles you want to check here
 ]
 
 # File paths
-INPUT_FILE = Path("output/shopify_products.csv")
+INPUT_FILE = Path("output/shopify_products_with_types.csv")
 OUTPUT_FILE = Path("output/shopify_inspection_results.csv")
 
 
