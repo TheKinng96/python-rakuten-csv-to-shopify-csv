@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Script to audit products and variants for missing images
+Script to audit products and variants for missing images and generate JSON data for GraphQL processing
 
 This script:
-1. Scans all CSV files to identify products and variants
-2. Connects to Shopify API to check actual image availability
-3. Generates comprehensive missing images audit report (04_missing_images_audit.csv)
-4. Prioritizes products based on image availability and product importance
+1. Scans all CSV files to identify products and variants  
+2. Analyzes image availability from CSV data
+3. Generates JSON data for Node.js GraphQL operations
+4. Outputs: shared/missing_images_audit.json
 """
-import csv
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,19 +16,18 @@ from typing import List, Dict, Any, Set
 import pandas as pd
 from tqdm import tqdm
 
-# Add src to path for imports
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-from shopify_manager.client import ShopifyClient
-from shopify_manager.config import shopify_config, path_config
-from shopify_manager.logger import get_script_logger
-from shopify_manager.models import ShopifyProduct, MissingImageRecord
-
-logger = get_script_logger("04_audit_images")
+# Add utils to path
+sys.path.append(str(Path(__file__).parent))
+from utils.json_output import (
+    save_json_report,
+    create_missing_image_record,
+    log_processing_summary,
+    validate_json_structure
+)
 
 
 class ImageAuditor:
-    """Audits product and variant images for completeness"""
+    """Audits product and variant images for completeness from CSV data"""
     
     def __init__(self):
         self.priority_keywords = {
@@ -64,306 +62,282 @@ class ImageAuditor:
         
         return 'medium'  # Default priority
     
-    def audit_product_images(self, product: ShopifyProduct) -> List[Dict[str, Any]]:
+    def audit_product_from_csv_data(self, product_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """
-        Audit a single product's images
+        Audit a single product's images from CSV data
         Returns list of audit records for products/variants with missing images
         """
         audit_records = []
         
-        # Count product-level images
-        product_image_count = len([img for img in product.images if img.src])
+        if not product_data:
+            return audit_records
         
-        # Check each variant
-        for variant in product.variants:
-            variant_has_image = False
-            
-            # Check if variant has a specific image assigned
-            if variant.image_id:
-                variant_has_image = any(img.id == variant.image_id for img in product.images)
-            
-            # Determine if this variant needs attention
+        handle, rows = product_data
+        
+        # Get product-level info from first row
+        main_row = rows[0]
+        product_title = main_row.get('Title', '')
+        product_tags = main_row.get('Tags', '')
+        
+        # Count unique images across all rows
+        unique_images = set()
+        for row in rows:
+            image_src = row.get('Image Src', '')
+            if image_src and not pd.isna(image_src):
+                unique_images.add(str(image_src))
+        
+        product_image_count = len(unique_images)
+        
+        # Group variants by SKU
+        variants = {}
+        for row in rows:
+            variant_sku = row.get('Variant SKU', '')
+            if variant_sku and not pd.isna(variant_sku):
+                variant_sku = str(variant_sku)
+                if variant_sku not in variants:
+                    variants[variant_sku] = {
+                        'sku': variant_sku,
+                        'title': row.get('Option1 Value', '') or variant_sku,
+                        'has_image': False
+                    }
+                
+                # Check if this variant has an associated image
+                image_src = row.get('Image Src', '')
+                if image_src and not pd.isna(image_src):
+                    variants[variant_sku]['has_image'] = True
+        
+        variant_count = len(variants)
+        
+        # Check each variant for issues
+        for variant_sku, variant_info in variants.items():
             needs_attention = False
-            priority_reasons = []
+            issues = []
             
+            # No product images at all
             if product_image_count == 0:
                 needs_attention = True
-                priority_reasons.append("no_product_images")
+                issues.append("no_product_images")
             
-            if not variant_has_image and len(product.variants) > 1:
+            # Multiple variants but this variant has no specific image
+            if variant_count > 1 and not variant_info['has_image']:
                 needs_attention = True
-                priority_reasons.append("no_variant_image")
+                issues.append("no_variant_image")
             
             if needs_attention:
-                priority = self.determine_priority(
-                    product.title, 
-                    product.tags, 
-                    len(product.variants)
-                )
+                priority = self.determine_priority(product_title, product_tags, variant_count)
                 
                 audit_records.append({
-                    'product_handle': product.handle,
-                    'shopify_product_id': product.id,
-                    'variant_sku': variant.sku,
-                    'variant_title': variant.title,
-                    'product_title': product.title,
-                    'product_image_count': product_image_count,
-                    'variant_has_image': variant_has_image,
-                    'variant_count': len(product.variants),
-                    'priority_level': priority,
-                    'priority_reasons': ', '.join(priority_reasons),
-                    'product_tags': product.tags,
-                    'audit_timestamp': datetime.now()
+                    'productHandle': handle,
+                    'productId': None,  # Will be filled by Node.js
+                    'variantSku': variant_sku,
+                    'productTitle': product_title,
+                    'productImageCount': product_image_count,
+                    'variantCount': variant_count,
+                    'variantHasImage': variant_info['has_image'],
+                    'priorityLevel': priority,
+                    'issues': issues,
+                    'productTags': product_tags,
+                    'needsAttention': True
                 })
         
         return audit_records
 
 
-def collect_products_from_csv() -> Set[str]:
+def get_csv_files() -> List[Path]:
+    """Get all CSV files from data directory"""
+    data_dir = Path(__file__).parent.parent / "data"
+    return list(data_dir.glob("products_export_*.csv"))
+
+def load_and_group_csv_data() -> Dict[str, List[Dict[str, Any]]]:
     """
-    Collect unique product handles from CSV files
-    Returns set of handles to audit
+    Load all CSV files and group rows by product handle
+    Returns dict of handle -> list of rows
     """
-    logger.info("Collecting product handles from CSV files...")
+    print("📂 Loading CSV data files...")
     
-    product_handles = set()
-    csv_files = path_config.get_csv_files()
+    csv_files = get_csv_files()
+    all_products = {}
+    total_rows = 0
     
     for csv_file in csv_files:
-        logger.info(f"Scanning {csv_file.name}...")
+        print(f"   📄 Reading {csv_file.name}...")
         
         try:
-            # Read CSV in chunks to handle large files
-            chunk_iter = pd.read_csv(
-                csv_file,
-                chunksize=shopify_config.chunk_size,
-                encoding='utf-8',
-                low_memory=False
-            )
+            # Read entire CSV file
+            df = pd.read_csv(csv_file, encoding='utf-8', low_memory=False)
+            rows_in_file = len(df)
+            total_rows += rows_in_file
             
-            for chunk_idx, chunk in enumerate(chunk_iter):
-                logger.debug(f"Processing chunk {chunk_idx + 1} from {csv_file.name}")
-                
-                for _, row in chunk.iterrows():
-                    handle = row.get('Handle', '')
-                    
-                    if handle and not pd.isna(handle):
-                        product_handles.add(str(handle))
-                        
+            print(f"      ✅ {rows_in_file:,} rows loaded")
+            
+            # Group by Handle
+            for _, row in df.iterrows():
+                handle = row.get('Handle', '')
+                if handle and not pd.isna(handle):
+                    handle = str(handle).strip()
+                    if handle not in all_products:
+                        all_products[handle] = []
+                    all_products[handle].append(row.to_dict())
+            
         except Exception as e:
-            logger.error(f"Error processing {csv_file.name}: {e}")
+            print(f"      ❌ Error reading {csv_file.name}: {e}")
             continue
     
-    logger.info(f"Collected {len(product_handles)} unique product handles")
-    return product_handles
-
-
-def audit_images_via_api(product_handles: Set[str]) -> List[MissingImageRecord]:
-    """
-    Connect to Shopify API and audit images for all products
-    Returns list of missing image records
-    """
-    logger.info("Starting image audit via Shopify API...")
+    unique_products = len(all_products)
+    print(f"📊 Summary: {total_rows:,} total rows → {unique_products:,} unique products")
     
-    # Initialize Shopify client and auditor
-    client = ShopifyClient(shopify_config, use_test_store=True)
+    return all_products
+
+
+def analyze_csv_files_for_missing_images() -> List[Dict[str, Any]]:
+    """
+    Analyze CSV files to find products with missing images
+    Returns list of records for JSON output
+    """
+    print("🔍 Analyzing CSV files for missing images...")
+    
+    # Load and group CSV data
+    grouped_products = load_and_group_csv_data()
+    
+    if not grouped_products:
+        print("❌ No products found in CSV files")
+        return []
+    
     auditor = ImageAuditor()
     missing_image_records = []
+    total_products = len(grouped_products)
+    processed_count = 0
+    issues_found = 0
     
-    # Get all products from Shopify
-    logger.info("Retrieving all products from Shopify...")
-    all_products = client.get_all_products()
+    print(f"🔄 Auditing {total_products:,} products for image issues...")
     
-    # Create handle lookup for efficient processing
-    handle_to_product = {}
-    for product_data in all_products:
-        handle = product_data.get('handle')
-        if handle:
-            handle_to_product[handle] = ShopifyProduct.from_shopify_api(product_data)
-    
-    logger.info(f"Retrieved {len(handle_to_product)} products from Shopify")
-    
-    # Audit each product handle from CSV
-    not_found_handles = []
-    
-    for handle in tqdm(product_handles, desc="Auditing products"):
+    for handle, product_rows in tqdm(grouped_products.items(), desc="Auditing products"):
         try:
-            if handle not in handle_to_product:
-                not_found_handles.append(handle)
-                logger.debug(f"Product handle '{handle}' not found in Shopify")
-                continue
-            
-            product = handle_to_product[handle]
-            
             # Audit this product's images
-            audit_results = auditor.audit_product_images(product)
+            audit_results = auditor.audit_product_from_csv_data((handle, product_rows))
             
-            # Convert to MissingImageRecord objects
-            for audit_result in audit_results:
-                record = MissingImageRecord(
-                    product_handle=audit_result['product_handle'],
-                    shopify_product_id=audit_result['shopify_product_id'],
-                    variant_sku=audit_result['variant_sku'],
-                    product_image_count=audit_result['product_image_count'],
-                    variant_has_image=audit_result['variant_has_image'],
-                    priority_level=audit_result['priority_level'],
-                    product_title=audit_result['product_title'],
-                    audit_timestamp=audit_result['audit_timestamp']
-                )
-                missing_image_records.append(record)
+            if audit_results:
+                missing_image_records.extend(audit_results)
+                issues_found += len(audit_results)
+            
+            processed_count += 1
+            
+            # Progress logging every 1000 products
+            if processed_count % 1000 == 0:
+                print(f"   📈 Processed {processed_count:,}/{total_products:,} products "
+                      f"({issues_found} issues found)")
                 
         except Exception as e:
-            logger.error(f"Error auditing product {handle}: {e}")
+            print(f"   ❌ Error auditing product {handle}: {e}")
             continue
     
-    if not_found_handles:
-        logger.warning(f"{len(not_found_handles)} product handles from CSV not found in Shopify")
-        
-        # Save not found handles for reference
-        not_found_path = path_config.get_report_path("04_products_not_found_in_shopify.csv")
-        with open(not_found_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['product_handle', 'note'])
-            for handle in not_found_handles:
-                writer.writerow([handle, 'Product exists in CSV but not found in Shopify'])
+    print(f"\n📊 Analysis Summary:")
+    print(f"   📄 Products processed: {processed_count:,}")
+    print(f"   🎯 Products with image issues: {len(set(r['productHandle'] for r in missing_image_records))}")
+    print(f"   🔍 Total issues found: {issues_found}")
     
-    logger.info(f"Image audit completed. {len(missing_image_records)} issues found")
-    return missing_image_records
-
-
-def save_audit_report(missing_image_records: List[MissingImageRecord]) -> None:
-    """Save audit results to CSV report"""
-    report_path = path_config.get_report_path("04_missing_images_audit.csv")
-    
-    logger.info(f"Saving audit report to {report_path}")
-    
-    with open(report_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = [
-            'product_handle', 'shopify_product_id', 'variant_sku', 'product_title',
-            'product_image_count', 'variant_has_image', 'priority_level', 
-            'audit_timestamp'
-        ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        # Sort by priority (high -> medium -> low) and then by product title
-        priority_order = {'high': 0, 'medium': 1, 'low': 2}
-        sorted_records = sorted(
-            missing_image_records,
-            key=lambda r: (priority_order.get(r.priority_level, 1), r.product_title)
-        )
-        
-        for record in sorted_records:
-            writer.writerow({
-                'product_handle': record.product_handle,
-                'shopify_product_id': record.shopify_product_id,
-                'variant_sku': record.variant_sku,
-                'product_title': record.product_title,
-                'product_image_count': record.product_image_count,
-                'variant_has_image': record.variant_has_image,
-                'priority_level': record.priority_level,
-                'audit_timestamp': record.audit_timestamp.isoformat()
-            })
-    
-    # Generate summary by priority
+    # Show priority distribution
     priority_counts = {}
     for record in missing_image_records:
-        priority = record.priority_level
+        priority = record['priorityLevel']
         priority_counts[priority] = priority_counts.get(priority, 0) + 1
     
-    logger.info("Audit Report Summary:")
-    logger.info(f"  Total issues: {len(missing_image_records)}")
+    print(f"   📈 Priority distribution:")
     for priority in ['high', 'medium', 'low']:
         count = priority_counts.get(priority, 0)
-        logger.info(f"  {priority.capitalize()} priority: {count}")
-
-
-def generate_summary_report(missing_image_records: List[MissingImageRecord]) -> None:
-    """Generate additional summary reports for different use cases"""
+        print(f"      - {priority}: {count}")
     
-    # High priority products only
-    high_priority_path = path_config.get_report_path("04_high_priority_missing_images.csv")
-    high_priority_records = [r for r in missing_image_records if r.priority_level == 'high']
-    
-    with open(high_priority_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ['product_handle', 'product_title', 'variant_sku', 'issue_type']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        for record in high_priority_records:
-            issue_type = "No product images" if record.product_image_count == 0 else "No variant image"
-            writer.writerow({
-                'product_handle': record.product_handle,
-                'product_title': record.product_title,
-                'variant_sku': record.variant_sku,
-                'issue_type': issue_type
-            })
-    
-    logger.info(f"High priority report saved: {len(high_priority_records)} products")
-    
-    # Products with no images at all
-    no_images_path = path_config.get_report_path("04_products_with_no_images.csv")
-    no_images_records = [r for r in missing_image_records if r.product_image_count == 0]
-    
-    with open(no_images_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ['product_handle', 'product_title']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        
-        # Deduplicate by product handle
-        seen_handles = set()
-        for record in no_images_records:
-            if record.product_handle not in seen_handles:
-                writer.writerow({
-                    'product_handle': record.product_handle,
-                    'product_title': record.product_title
-                })
-                seen_handles.add(record.product_handle)
-    
-    logger.info(f"No images report saved: {len(seen_handles)} products")
+    return missing_image_records
 
 
 def main():
     """Main execution function"""
-    logger.info("=" * 60)
-    logger.info("Starting Missing Images Audit Script")
-    logger.info("=" * 60)
+    print("=" * 70)
+    print("🔍 MISSING IMAGES AUDIT (JSON OUTPUT)")
+    print("=" * 70)
     
     try:
-        # Phase 1: Collect product handles from CSV
-        logger.info("Phase 1: Collecting product handles from CSV files...")
-        product_handles = collect_products_from_csv()
-        
-        if not product_handles:
-            logger.info("No product handles found in CSV files. Exiting.")
-            return
-        
-        # Phase 2: Audit via API
-        logger.info("Phase 2: Auditing images via Shopify API...")
-        missing_image_records = audit_images_via_api(product_handles)
-        
-        # Phase 3: Generate reports
-        logger.info("Phase 3: Generating audit reports...")
-        save_audit_report(missing_image_records)
-        generate_summary_report(missing_image_records)
+        # Phase 1: Analyze CSV files
+        missing_image_records = analyze_csv_files_for_missing_images()
         
         if not missing_image_records:
-            logger.info("🎉 All products have adequate images! No issues found.")
-        else:
-            logger.info(f"📋 Audit completed. {len(missing_image_records)} products/variants need images.")
-            logger.info("Check the generated reports in the reports/ folder:")
-            logger.info("  - 04_missing_images_audit.csv (complete audit)")
-            logger.info("  - 04_high_priority_missing_images.csv (urgent fixes needed)")
-            logger.info("  - 04_products_with_no_images.csv (products with zero images)")
+            print("\n✅ All products have adequate images!")
+            # Save empty JSON file for consistency
+            save_json_report([], "missing_images_audit.json", "No missing image issues found in CSV data")
+            return 0
+        
+        # Phase 2: Validate and save JSON
+        print(f"\n💾 Saving JSON data for GraphQL processing...")
+        
+        required_fields = ['productHandle', 'variantSku', 'productTitle', 'priorityLevel']
+        if not validate_json_structure(missing_image_records, required_fields):
+            print("❌ JSON validation failed")
+            return 1
+        
+        json_path = save_json_report(
+            missing_image_records,
+            "missing_images_audit.json",
+            f"Products with missing images for attention via GraphQL ({len(missing_image_records)} issues)"
+        )
+        
+        # Phase 3: Generate summary list
+        print(f"\n📋 Generating summary list...")
+        
+        summary_list = []
+        handles_seen = set()
+        
+        for record in missing_image_records:
+            handle = record['productHandle']
+            if handle not in handles_seen:
+                handles_seen.add(handle)
+                # Count issues for this product
+                product_issues = [r for r in missing_image_records if r['productHandle'] == handle]
+                
+                summary_list.append({
+                    'handle': handle,
+                    'title': record['productTitle'],
+                    'image_count': record['productImageCount'],
+                    'variant_count': record['variantCount'],
+                    'issues_count': len(product_issues),
+                    'priority': record['priorityLevel'],
+                    'issues': list(set(issue for r in product_issues for issue in r['issues']))
+                })
+        
+        # Sort by priority (high first) then by issues count
+        priority_order = {'high': 0, 'medium': 1, 'low': 2}
+        summary_list.sort(key=lambda x: (priority_order.get(x['priority'], 1), -x['issues_count']))
+        
+        # Print summary list to console  
+        print(f"\n📝 Summary List - Products with Missing Images:")
+        print(f"{'Handle':<30} {'Title':<40} {'Images':<8} {'Variants':<10} {'Priority':<10} {'Issues':<30}")
+        print("-" * 130)
+        
+        for item in summary_list[:20]:  # Show first 20
+            title_truncated = item['title'][:37] + "..." if len(item['title']) > 40 else item['title']
+            issues_str = ', '.join(item['issues'])
+            if len(issues_str) > 27:
+                issues_str = issues_str[:27] + "..."
+            
+            print(f"{item['handle']:<30} {title_truncated:<40} {item['image_count']:<8} "
+                  f"{item['variant_count']:<10} {item['priority']:<10} {issues_str:<30}")
+        
+        if len(summary_list) > 20:
+            print(f"... and {len(summary_list)-20} more products")
+        
+        print(f"\n🎉 Analysis completed successfully!")
+        print(f"   📄 JSON data saved to: {json_path}")
+        print(f"   🚀 Ready for GraphQL processing")
+        print(f"\n💡 Next step: cd node && npm run audit-images")
+        
+        return 0
         
     except KeyboardInterrupt:
-        logger.info("Script interrupted by user")
+        print("\n⏹️  Analysis interrupted by user")
+        return 1
     except Exception as e:
-        logger.error(f"Script failed with error: {e}")
-        raise
-    finally:
-        logger.info("Missing Images Audit Script completed")
+        print(f"\n❌ Analysis failed: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

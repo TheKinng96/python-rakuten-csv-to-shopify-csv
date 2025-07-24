@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Script to import production CSV data to test Shopify store
+Script to convert production CSV data to JSON format for GraphQL import
 
 This script:
 1. Reads all 5 CSV files from data/ folder  
 2. Converts CSV data to Shopify API format
-3. Uploads products to test store with progress logging
+3. Exports products as JSON for GraphQL processing
 4. Provides console feedback on progress (xxx over xxx)
-5. No detailed CSV reports - just console logging for upload progress
+5. Outputs: shared/products_for_import.json
 """
 import sys
 from pathlib import Path
@@ -16,14 +16,14 @@ import time
 
 import pandas as pd
 
-# Add src to path for imports
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-from shopify_manager.client import ShopifyClient
-from shopify_manager.config import shopify_config, path_config
-from shopify_manager.logger import get_script_logger
-
-logger = get_script_logger("00_import_to_test")
+# Add utils to path
+sys.path.append(str(Path(__file__).parent))
+from utils.json_output import (
+    save_json_report, 
+    create_product_import_record,
+    log_processing_summary,
+    validate_json_structure
+)
 
 
 class CSVToShopifyConverter:
@@ -158,6 +158,11 @@ class CSVToShopifyConverter:
             return 0
 
 
+def get_csv_files() -> List[Path]:
+    """Get all CSV files from data directory"""
+    data_dir = Path(__file__).parent.parent / "data"
+    return list(data_dir.glob("products_export_*.csv"))
+
 def load_and_group_csv_data() -> Dict[str, List[Dict[str, Any]]]:
     """
     Load all CSV files and group rows by product handle
@@ -165,7 +170,7 @@ def load_and_group_csv_data() -> Dict[str, List[Dict[str, Any]]]:
     """
     print("📂 Loading CSV data files...")
     
-    csv_files = path_config.get_csv_files()
+    csv_files = get_csv_files()
     all_products = {}
     total_rows = 0
     
@@ -199,22 +204,22 @@ def load_and_group_csv_data() -> Dict[str, List[Dict[str, Any]]]:
     return all_products
 
 
-def upload_products_to_shopify(grouped_products: Dict[str, List[Dict[str, Any]]]) -> None:
+def convert_products_to_json(grouped_products: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """
-    Upload products to Shopify test store with progress logging
+    Convert products to JSON format for GraphQL processing
     """
-    print(f"🚀 Starting upload to Shopify test store...")
-    print(f"   📦 {len(grouped_products):,} products to upload")
+    print(f"🔄 Converting products to JSON format...")
+    print(f"   📦 {len(grouped_products):,} products to convert")
     
-    # Initialize converter and client
+    # Initialize converter
     converter = CSVToShopifyConverter()
-    client = ShopifyClient(shopify_config, use_test_store=True)
     
     # Track progress
     total_products = len(grouped_products)
-    uploaded_count = 0
+    converted_count = 0
     error_count = 0
     start_time = time.time()
+    product_records = []
     
     # Process each product
     for current_num, (handle, product_rows) in enumerate(grouped_products.items(), 1):
@@ -224,20 +229,24 @@ def upload_products_to_shopify(grouped_products: Dict[str, List[Dict[str, Any]]]
             
             if not product_data:
                 print(f"   ⚠️  Skipping empty product: {handle}")
+                error_count += 1
                 continue
             
-            # Upload to Shopify
-            if shopify_config.dry_run:
-                # Simulate upload in dry run mode
-                time.sleep(0.01)  # Small delay to simulate API call
-                uploaded_count += 1
-            else:
-                response = client.create_product(product_data)
-                if response.get('product', {}).get('id'):
-                    uploaded_count += 1
-                else:
-                    error_count += 1
-                    logger.warning(f"Failed to upload product {handle}")
+            # Create JSON record using the utility function
+            product_record = create_product_import_record(
+                handle=product_data.get('handle', ''),
+                title=product_data.get('title', ''),
+                body_html=product_data.get('body_html', ''),
+                vendor=product_data.get('vendor', ''),
+                product_type=product_data.get('product_type', ''),
+                tags=product_data.get('tags', ''),
+                variants=product_data.get('variants', []),
+                images=product_data.get('images', []),
+                options=product_data.get('options', [])
+            )
+            
+            product_records.append(product_record)
+            converted_count += 1
             
             # Progress logging every 50 products or at milestones
             if current_num % 50 == 0 or current_num in [1, 10, 100, 500] or current_num == total_products:
@@ -246,101 +255,79 @@ def upload_products_to_shopify(grouped_products: Dict[str, List[Dict[str, Any]]]
                 eta_seconds = (total_products - current_num) / rate if rate > 0 else 0
                 eta_minutes = eta_seconds / 60
                 
-                status = "DRY RUN" if shopify_config.dry_run else "UPLOADING"
-                print(f"   📈 [{status}] {current_num:,}/{total_products:,} products processed "
-                      f"({uploaded_count:,} success, {error_count:,} errors) "
+                print(f"   📈 [CONVERTING] {current_num:,}/{total_products:,} products processed "
+                      f"({converted_count:,} success, {error_count:,} errors) "
                       f"| Rate: {rate:.1f}/sec | ETA: {eta_minutes:.1f}min")
         
         except KeyboardInterrupt:
-            print(f"\n⏹️  Upload interrupted by user")
+            print(f"\n⏹️  Conversion interrupted by user")
             print(f"   📊 Progress: {current_num:,}/{total_products:,} processed")
-            return
+            break
         except Exception as e:
             error_count += 1
-            logger.error(f"Error uploading product {handle}: {e}")
-            
-            # Continue with next product
+            print(f"   ❌ Error converting product {handle}: {e}")
             continue
     
     # Final summary
     elapsed_total = time.time() - start_time
-    print(f"\n🎉 Upload completed!")
+    print(f"\n🎉 Conversion completed!")
     print(f"   📊 Total: {total_products:,} products")
-    print(f"   ✅ Successful: {uploaded_count:,}")
+    print(f"   ✅ Successful: {converted_count:,}")
     print(f"   ❌ Errors: {error_count:,}")
     print(f"   ⏱️  Time taken: {elapsed_total/60:.1f} minutes")
     
-    if shopify_config.dry_run:
-        print(f"   🔍 This was a DRY RUN - no actual uploads performed")
-        print(f"   💡 Set DRY_RUN=false in .env to perform actual upload")
-
-
-def verify_test_store_connection() -> bool:
-    """Verify connection to test store before upload"""
-    print("🔗 Verifying connection to test store...")
-    
-    try:
-        client = ShopifyClient(shopify_config, use_test_store=True)
-        
-        # Try to get a small number of products to test connection
-        response = client.get_products(limit=1)
-        
-        if 'products' in response:
-            print(f"   ✅ Successfully connected to test store")
-            return True
-        else:
-            print(f"   ❌ Unexpected response from test store")
-            return False
-            
-    except Exception as e:
-        print(f"   ❌ Failed to connect to test store: {e}")
-        print(f"   💡 Please check your .env configuration")
-        return False
+    return product_records
 
 
 def main():
     """Main execution function"""
     print("=" * 70)
-    print("🏪 SHOPIFY TEST STORE DATA IMPORT")
+    print("📄 CSV TO JSON CONVERTER (SHOPIFY IMPORT)")
     print("=" * 70)
     
     try:
-        # Phase 1: Verify connection
-        if not verify_test_store_connection():
-            print("\n❌ Cannot proceed without valid test store connection")
-            return 1
-        
-        # Phase 2: Load CSV data
+        # Phase 1: Load CSV data
         grouped_products = load_and_group_csv_data()
         
         if not grouped_products:
             print("❌ No products found in CSV files")
             return 1
         
-        # Phase 3: Confirm upload
-        if not shopify_config.dry_run:
-            print(f"\n⚠️  LIVE UPLOAD MODE - This will upload {len(grouped_products):,} products to your test store!")
-            response = input("Continue? (y/N): ")
-            if response.lower() != 'y':
-                print("Upload cancelled by user")
-                return 0
-        else:
-            print(f"\n🔍 DRY RUN MODE - Will simulate upload of {len(grouped_products):,} products")
+        # Phase 2: Convert to JSON
+        print(f"\n🔄 Converting {len(grouped_products):,} products to JSON format...")
+        product_records = convert_products_to_json(grouped_products)
         
-        # Phase 4: Upload products
-        upload_products_to_shopify(grouped_products)
+        if not product_records:
+            print("❌ No products converted successfully")
+            return 1
         
-        print(f"\n✨ Import process completed successfully!")
+        # Phase 3: Validate and save JSON
+        print(f"\n💾 Saving JSON data for GraphQL processing...")
+        
+        required_fields = ['handle', 'title', 'variants', 'images']
+        if not validate_json_structure(product_records, required_fields):
+            print("❌ JSON validation failed")
+            return 1
+        
+        json_path = save_json_report(
+            product_records,
+            "products_for_import.json",
+            f"Shopify products ready for GraphQL import ({len(product_records)} products)"
+        )
+        
+        print(f"\n🎉 Conversion completed successfully!")
+        print(f"   📄 JSON data saved to: {json_path}")
+        print(f"   🚀 Ready for GraphQL processing")
+        print(f"\n💡 Next step: cd node && npm run import-products")
+        
+        return 0
         
     except KeyboardInterrupt:
-        print("\n⏹️  Import interrupted by user")
+        print("\n⏹️  Conversion interrupted by user")
         return 1
     except Exception as e:
-        print(f"\n❌ Import failed with error: {e}")
-        logger.error(f"Import script failed: {e}")
+        print(f"\n❌ Conversion failed with error: {e}")
         return 1
-    
-    return 0
 
 
 if __name__ == "__main__":

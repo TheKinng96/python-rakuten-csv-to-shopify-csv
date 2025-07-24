@@ -280,7 +280,59 @@ def main():
             f"Products with EC-UP content for cleanup via GraphQL ({len(rakuten_records)} products)"
         )
         
-        print(f"\n🎉 Analysis completed successfully!")
+        # Phase 3: Generate summary list with matched keys
+        print(f"\n📋 Generating summary list...")
+        
+        summary_list = []
+        all_matched_keys = set()
+        
+        for record in rakuten_records:
+            matched_keys = []
+            for pattern in record['patternsFound']:
+                matched_keys.append(pattern['patternName'])
+                all_matched_keys.add(pattern['patternName'])
+            
+            summary_list.append({
+                'handle': record['productHandle'],
+                'title': 'Title not available in CSV analysis',  # Title would need to be extracted from CSV
+                'total_patterns': record['totalPatterns'],
+                'cleanup_size': record['estimatedCleanupSize'],
+                'matched_keys': matched_keys,
+                'pattern_types': list(set(p['patternType'] for p in record['patternsFound']))
+            })
+        
+        # Sort by cleanup size (largest first)
+        summary_list.sort(key=lambda x: -x['cleanup_size'])
+        
+        # Print summary list to console  
+        print(f"\n📝 Summary List - Products with Rakuten EC-UP Content:")
+        print(f"{'Handle':<30} {'Patterns':<10} {'Size (B)':<10} {'Pattern Types':<30} {'Keys':<40}")
+        print("-" * 125)
+        
+        for item in summary_list[:20]:  # Show first 20
+            types_str = ', '.join(item['pattern_types'][:3])
+            if len(item['pattern_types']) > 3:
+                types_str += f" (+{len(item['pattern_types'])-3})"
+            
+            keys_str = ', '.join(item['matched_keys'][:2])  # Show first 2 keys
+            if len(item['matched_keys']) > 2:
+                keys_str += f" (+{len(item['matched_keys'])-2} more)"
+            
+            print(f"{item['handle']:<30} {item['total_patterns']:<10} {item['cleanup_size']:<10} "
+                  f"{types_str:<30} {keys_str:<40}")
+        
+        if len(summary_list) > 20:
+            print(f"... and {len(summary_list)-20} more products")
+        
+        # Show all unique matched keys found
+        print(f"\n📋 All Matched EC-UP Keys Found ({len(all_matched_keys)} unique):")
+        sorted_keys = sorted(all_matched_keys)
+        for i, key in enumerate(sorted_keys):
+            if i % 3 == 0:
+                print()  # New line every 3 keys
+            print(f"  {key:<25}", end="")
+        
+        print(f"\n\n🎉 Analysis completed successfully!")
         print(f"   📄 JSON data saved to: {json_path}")
         print(f"   🚀 Ready for GraphQL processing")
         print(f"\n💡 Next step: cd node && npm run clean-rakuten")

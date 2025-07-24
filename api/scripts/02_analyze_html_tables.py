@@ -337,6 +337,40 @@ def main():
             f"Products with HTML table issues for fixing via GraphQL ({len(table_records)} products)"
         )
         
+        # Phase 3: Generate summary list
+        print(f"\n📋 Generating summary list...")
+        
+        summary_list = []
+        for record in table_records:
+            summary_list.append({
+                'handle': record['productHandle'],
+                'title': 'Title not available in CSV analysis',  # Title would need to be extracted from CSV
+                'table_count': record['tableCount'],
+                'total_issues': record['totalIssues'],
+                'high_severity_issues': record['highSeverityIssues'],
+                'priority': record['priority'],
+                'top_issues': record['issuesFound'][:3]  # Show first 3 issues
+            })
+        
+        # Sort by priority and severity
+        summary_list.sort(key=lambda x: (0 if x['priority'] == 'high' else 1, -x['high_severity_issues']))
+        
+        # Print summary list to console  
+        print(f"\n📝 Summary List - Products with HTML Table Issues:")
+        print(f"{'Handle':<30} {'Tables':<8} {'Issues':<8} {'Priority':<10} {'Top Issues':<40}")
+        print("-" * 100)
+        
+        for item in summary_list[:20]:  # Show first 20
+            top_issues_str = '; '.join([issue.split(':')[0] for issue in item['top_issues']])
+            if len(top_issues_str) > 37:
+                top_issues_str = top_issues_str[:37] + "..."
+                
+            print(f"{item['handle']:<30} {item['table_count']:<8} {item['total_issues']:<8} "
+                  f"{item['priority']:<10} {top_issues_str:<40}")
+        
+        if len(summary_list) > 20:
+            print(f"... and {len(summary_list)-20} more products")
+        
         print(f"\n🎉 Analysis completed successfully!")
         print(f"   📄 JSON data saved to: {json_path}")
         print(f"   🚀 Ready for GraphQL processing")

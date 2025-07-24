@@ -140,6 +140,33 @@ def main():
             f"Products with -XXss images for removal via GraphQL ({len(ss_image_records)} products)"
         )
         
+        # Phase 3: Generate summary list
+        print(f"\n📋 Generating summary list...")
+        
+        summary_list = []
+        for record in ss_image_records:
+            summary_list.append({
+                'handle': record['productHandle'],
+                'title': 'Title not available in CSV analysis',  # Title would need to be extracted from CSV
+                'ss_images_count': record['totalImages'],
+                'ss_patterns': list(set(img['ssPattern'] for img in record['imagesToRemove']))
+            })
+        
+        # Print summary list to console  
+        print(f"\n📝 Summary List - Products with SS Images:")
+        print(f"{'Handle':<30} {'SS Images':<12} {'Patterns':<20}")
+        print("-" * 70)
+        
+        for item in summary_list[:20]:  # Show first 20
+            patterns_str = ', '.join(item['ss_patterns'][:3])  # Show first 3 patterns
+            if len(item['ss_patterns']) > 3:
+                patterns_str += f" (+{len(item['ss_patterns'])-3} more)"
+            
+            print(f"{item['handle']:<30} {item['ss_images_count']:<12} {patterns_str:<20}")
+        
+        if len(summary_list) > 20:
+            print(f"... and {len(summary_list)-20} more products")
+        
         print(f"\n🎉 Analysis completed successfully!")
         print(f"   📄 JSON data saved to: {json_path}")
         print(f"   🚀 Ready for GraphQL processing")

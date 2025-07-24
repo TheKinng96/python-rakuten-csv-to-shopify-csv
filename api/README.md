@@ -48,18 +48,16 @@ CHUNK_SIZE=1000
 ## Processing Scripts
 
 ### Step 0: Data Import
-Upload all production CSV data to test Shopify store for safe processing.
+Convert production CSV data to JSON format for GraphQL import processing.
 
 **Script**: `scripts/00_import_to_test.py`
-**Output**: Console progress logging only (no CSV reports)
+**Output**: `shared/products_for_import.json` - Shopify-ready product data
 
 ### Issue 1: SS Images (863 products)
 Images ending with `-XXss.jpg` pattern that need removal.
 
-**Script**: `scripts/01_remove_ss_images.py`
-**Reports**: 
-- `reports/01_ss_images_analysis.csv` - Analysis of affected products
-- `reports/01_ss_images_removed.csv` - Processing results
+**Script**: `scripts/01_analyze_ss_images.py`
+**Output**: `shared/ss_images_to_remove.json` - JSON data for GraphQL processing
 
 ### Issue 2: HTML Table Problems
 Nested table structures causing layout overlaps.
@@ -86,33 +84,31 @@ Products/variants without images needing manual attention.
 
 ## Usage
 
-### 0. Import Data to Test Store
+### 0. Convert CSV Data to JSON
 
 ```bash
-# Import all CSV data to test store (with progress logging)
+# Convert all CSV data to JSON format for GraphQL processing
 uv run scripts/00_import_to_test.py
 ```
 
 This will:
 - Load all 5 CSV files from `data/` folder
 - Convert CSV format to Shopify API format
-- Upload ~1M rows as products to test store
+- Generate JSON file: `shared/products_for_import.json`
 - Show console progress: "xxx/xxx products processed"
 
-### 1. Remove SS Images
+### 1. Analyze SS Images
 
 ```bash
-# Analysis only (safe to run)
-uv run scripts/01_remove_ss_images.py
-
-# If you want to actually remove images, set DRY_RUN=false in .env
+# Generate JSON data for SS image removal
+uv run scripts/01_analyze_ss_images.py
 ```
 
 This will:
 - Scan all CSV files in `data/` folder
 - Identify products with `-XXss.jpg` images
-- Generate analysis report
-- Optionally remove images via Shopify API
+- Generate JSON file: `shared/ss_images_to_remove.json`
+- Ready for GraphQL processing with Node.js
 
 ### 2. Fix HTML Tables
 
@@ -137,13 +133,16 @@ uv run scripts/04_audit_images.py
 ```
 api/
 ├── data/                          # Your CSV files (products_export_*.csv)
+├── shared/                        # Generated JSON files for GraphQL processing
 ├── reports/                       # Generated analysis and processing reports
 ├── scripts/                       # Processing scripts
-│   ├── 00_import_to_test.py      # Import CSV data to test store
-│   ├── 01_remove_ss_images.py    # Remove -XXss.jpg images
+│   ├── 00_import_to_test.py      # Convert CSV data to JSON format
+│   ├── 01_analyze_ss_images.py   # Analyze -XXss.jpg images (JSON output)
 │   ├── 02_fix_html_tables.py     # Fix nested table issues  
 │   ├── 03_clean_rakuten.py       # Remove EC-UP content
-│   └── 04_audit_images.py        # Generate missing images report
+│   ├── 04_audit_images.py        # Generate missing images report
+│   └── utils/                     # Utility modules
+│       └── json_output.py         # JSON output utilities
 ├── src/shopify_manager/           # Core modules
 │   ├── client.py                 # Shopify API client with rate limiting
 │   ├── config.py                 # Configuration management
@@ -179,8 +178,8 @@ Each script generates detailed CSV reports:
 ## Current Status
 
 - ✅ **Project Setup**: UV environment, core modules
-- ✅ **Data Import Script**: Upload CSV data to test store
-- ✅ **SS Images Script**: Analysis and removal functionality
+- ✅ **Data Import Script**: Convert CSV data to JSON format for GraphQL processing
+- ✅ **SS Images Analysis**: Generate JSON data for -XXss.jpg image removal via GraphQL
 - ✅ **HTML Tables Script**: Intelligent table structure fixes
 - ✅ **Rakuten Cleanup Script**: Comprehensive EC-UP pattern discovery and removal
 - ✅ **Missing Images Audit**: Complete image availability audit
