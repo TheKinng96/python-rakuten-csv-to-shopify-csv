@@ -4,7 +4,6 @@ Setup script for Shopify Product Management System
 
 This script helps initialize the environment and verify everything is working correctly.
 """
-import os
 import sys
 from pathlib import Path
 
@@ -108,7 +107,6 @@ def test_imports():
         sys.path.append(str(Path("src")))
         
         from shopify_manager.config import shopify_config, path_config
-        from shopify_manager.client import ShopifyClient
         
         print("✅ All core modules import successfully")
         
@@ -162,9 +160,10 @@ def main():
     if all_passed:
         print("🎉 Setup completed successfully!")
         print("\nNext steps:")
-        print("1. Run image analysis: uv run scripts/01_remove_ss_images.py")
-        print("2. Check generated reports in reports/ folder")
-        print("3. Set DRY_RUN=false in .env when ready for actual processing")
+        print("1. Import data to test store: uv run scripts/00_import_to_test.py")
+        print("2. Run image analysis: uv run scripts/01_remove_ss_images.py")
+        print("3. Check generated reports in reports/ folder")
+        print("4. Set DRY_RUN=false in .env when ready for actual processing")
     else:
         print("❌ Setup incomplete. Please fix the issues above and run setup.py again.")
         return 1

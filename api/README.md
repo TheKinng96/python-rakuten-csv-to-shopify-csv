@@ -2,6 +2,8 @@
 
 API-based system for managing and cleaning Shopify product data, specifically designed to handle issues from Rakuten-to-Shopify migration.
 
+**Complete workflow**: Import data → Clean images → Fix HTML → Remove Rakuten content → Audit missing images
+
 ## Quick Start
 
 ### Setup Environment
@@ -43,7 +45,13 @@ BATCH_SIZE=250
 CHUNK_SIZE=1000
 ```
 
-## Data Issues Addressed
+## Processing Scripts
+
+### Step 0: Data Import
+Upload all production CSV data to test Shopify store for safe processing.
+
+**Script**: `scripts/00_import_to_test.py`
+**Output**: Console progress logging only (no CSV reports)
 
 ### Issue 1: SS Images (863 products)
 Images ending with `-XXss.jpg` pattern that need removal.
@@ -78,6 +86,19 @@ Products/variants without images needing manual attention.
 
 ## Usage
 
+### 0. Import Data to Test Store
+
+```bash
+# Import all CSV data to test store (with progress logging)
+uv run scripts/00_import_to_test.py
+```
+
+This will:
+- Load all 5 CSV files from `data/` folder
+- Convert CSV format to Shopify API format
+- Upload ~1M rows as products to test store
+- Show console progress: "xxx/xxx products processed"
+
 ### 1. Remove SS Images
 
 ```bash
@@ -93,19 +114,19 @@ This will:
 - Generate analysis report
 - Optionally remove images via Shopify API
 
-### 2. Fix HTML Tables (Coming Soon)
+### 2. Fix HTML Tables
 
 ```bash
 uv run scripts/02_fix_html_tables.py
 ```
 
-### 3. Clean Rakuten Content (Coming Soon)
+### 3. Clean Rakuten Content
 
 ```bash
 uv run scripts/03_clean_rakuten.py
 ```
 
-### 4. Audit Missing Images (Coming Soon)
+### 4. Audit Missing Images
 
 ```bash
 uv run scripts/04_audit_images.py
@@ -118,6 +139,11 @@ api/
 ├── data/                          # Your CSV files (products_export_*.csv)
 ├── reports/                       # Generated analysis and processing reports
 ├── scripts/                       # Processing scripts
+│   ├── 00_import_to_test.py      # Import CSV data to test store
+│   ├── 01_remove_ss_images.py    # Remove -XXss.jpg images
+│   ├── 02_fix_html_tables.py     # Fix nested table issues  
+│   ├── 03_clean_rakuten.py       # Remove EC-UP content
+│   └── 04_audit_images.py        # Generate missing images report
 ├── src/shopify_manager/           # Core modules
 │   ├── client.py                 # Shopify API client with rate limiting
 │   ├── config.py                 # Configuration management
@@ -153,10 +179,11 @@ Each script generates detailed CSV reports:
 ## Current Status
 
 - ✅ **Project Setup**: UV environment, core modules
+- ✅ **Data Import Script**: Upload CSV data to test store
 - ✅ **SS Images Script**: Analysis and removal functionality
-- ⏳ **HTML Tables Script**: In development
-- ⏳ **Rakuten Cleanup Script**: In development  
-- ⏳ **Missing Images Audit**: In development
+- ✅ **HTML Tables Script**: Intelligent table structure fixes
+- ✅ **Rakuten Cleanup Script**: Comprehensive EC-UP pattern discovery and removal
+- ✅ **Missing Images Audit**: Complete image availability audit
 
 ## Development
 
