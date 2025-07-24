@@ -27,16 +27,25 @@ export async function executeQuery(client, query, variables = {}, maxRetries = s
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await client.request(query, { variables });
+      const {data, errors, extensions} = await client.request(query, { variables });
       
+      console.log('GraphQL response:', data, errors, extensions);
       // Check for GraphQL errors
-      if (response.errors && response.errors.length > 0) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(response.errors)}`);
+      if (errors && errors.length > 0) {
+        throw new Error(`GraphQL errors: ${JSON.stringify(errors)}`);
       }
       
-      return response.data;
+      return data;
       
     } catch (error) {
+      console.error('GraphQL request error:', {
+        message: error.message,
+        stack: error.stack,
+        response: error.response || undefined,
+        errors: error.errors || undefined,
+        graphQLErrors: error.graphQLErrors || undefined,
+        networkError: error.networkError || undefined
+      });
       lastError = error;
       
       if (attempt < maxRetries) {
@@ -113,13 +122,18 @@ export async function testConnection(useTestStore = true) {
       query {
         shop {
           name
-          domain
           email
         }
       }
     `;
     
     const response = await executeQuery(client, query);
+
+    console.log('RAW GraphQL response:', response);
+    
+    if (!response || !response.shop) {
+      throw new Error('Shop property missing in response. Full response: ' + JSON.stringify(response));
+    }
     
     console.log(`✅ Connected to Shopify store: ${response.shop.name}`);
     console.log(`   Domain: ${response.shop.domain}`);

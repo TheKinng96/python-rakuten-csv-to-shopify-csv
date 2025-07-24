@@ -32,7 +32,7 @@ export const shopifyConfig = {
   logLevel: process.env.LOG_LEVEL || 'INFO',
   
   // GraphQL specific settings
-  apiVersion: '2025-01',
+  apiVersion: '2025-07',
   maxRetries: 3,
   retryDelay: 1000, // milliseconds
 };
