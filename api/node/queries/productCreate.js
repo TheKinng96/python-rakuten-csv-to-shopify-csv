@@ -1,6 +1,19 @@
 /**
- * GraphQL mutation for creating products using 2025-07 API format
+ * GraphQL queries and mutations for creating products using 2025-07 API format
  */
+
+export const LOCATIONS_QUERY = `
+  query GetLocations {
+    locations(first: 5) {
+      edges {
+        node {
+          id
+          name
+        }
+      }
+    }
+  }
+`;
 
 export const PRODUCT_CREATE_MUTATION = `
   mutation($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
@@ -65,9 +78,13 @@ export const PRODUCT_VARIANTS_BULK_CREATE_MUTATION = `
     productVariantsBulkCreate(productId: $productId, variants: $variants) {
       productVariants {
         id
-        sku
         price
         compareAtPrice
+        inventoryItem {
+          id
+          sku
+          requiresShipping
+        }
         inventoryQuantity
         selectedOptions {
           name
@@ -75,7 +92,7 @@ export const PRODUCT_VARIANTS_BULK_CREATE_MUTATION = `
         }
         image {
           id
-          src
+          url
         }
       }
       userErrors {

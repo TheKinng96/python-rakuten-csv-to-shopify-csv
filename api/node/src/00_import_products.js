@@ -13,11 +13,12 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { shopifyConfig, pathConfig, getStoreConfig, validateConfig } from './config.js';
 import { ShopifyGraphQLClient } from './shopify-client.js';
-import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION } from '../queries/productCreate.js';
+import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION, LOCATIONS_QUERY } from '../queries/productCreate.js';
 
 class ProductImporter {
   constructor() {
     this.client = null;
+    this.shopLocationId = null;
     this.importResults = {
       successful: [],
       failed: [],
@@ -36,10 +37,59 @@ class ProductImporter {
     
     await this.client.testConnection();
     console.log('✅ Connected to Shopify test store');
+    
+    // Get shop location ID
+    await this.getShopLocationId();
+  }
+
+  async getShopLocationId() {
+    // Check if location ID is provided via environment variable
+    const envLocationId = process.env.SHOPIFY_LOCATION_ID;
+    
+    if (envLocationId) {
+      this.shopLocationId = envLocationId;
+      console.log(`✅ Using location ID from environment: ${envLocationId}`);
+      return;
+    }
+
+    console.log('🔍 Querying for shop locations...');
+    
+    try {
+      const locationsResult = await this.client.query(LOCATIONS_QUERY);
+      
+      console.log(locationsResult);
+      if (!locationsResult.locations?.edges?.length) {
+        throw new Error('No locations found in the shop');
+      }
+
+      // Look for location with name "Shop location"
+      const shopLocation = locationsResult.locations.edges.find(
+        edge => edge.node.name === 'Shop location'
+      );
+
+
+      if (!shopLocation) {
+        const availableLocations = locationsResult.locations.edges.map(
+          edge => `"${edge.node.name}" (${edge.node.id})`
+        ).join(', ');
+        
+        throw new Error(
+          `Shop location not found. Available locations: ${availableLocations}. ` +
+          `Please set SHOPIFY_LOCATION_ID environment variable or ensure you have a location named "Shop location".`
+        );
+      }
+
+      this.shopLocationId = shopLocation.node.id;
+      console.log(`✅ Found shop location: ${shopLocation.node.name} (${this.shopLocationId})`);
+      
+    } catch (error) {
+      throw new Error(`Failed to get shop location: ${error.message}`);
+    }
   }
 
   loadProductsFromJSON() {
-    const jsonPath = join(pathConfig.sharedPath, 'products_for_import.json');
+    const jsonPath = join(pathConfig.sharedPath, 'test.json');
+    // const jsonPath = join(pathConfig.sharedPath, 'products_for_import.json');
     
     if (!existsSync(jsonPath)) {
       throw new Error(`Products JSON file not found: ${jsonPath}`);
@@ -169,15 +219,25 @@ class ProductImporter {
         if (validVariants.length > 0) {
           const variantInputs = validVariants.map(variant => {
             const variantInput = {
-              sku: variant.sku,
+              inventoryItem: {
+                sku: variant.sku,
+                requiresShipping: variant.requires_shipping !== false
+              },
               price: variant.price?.toString() || '0.00',
-              compareAtPrice: variant.compare_at_price?.toString(),
-              inventoryQuantity: variant.inventory_quantity || 0,
-              requiresShipping: variant.requires_shipping !== false,
+              inventoryQuantities: [
+                {
+                  availableQuantity: variant.inventory_quantity || 0,
+                  locationId: this.shopLocationId
+                }
+              ],
               taxable: variant.taxable !== false,
-              inventoryManagement: 'SHOPIFY',
               inventoryPolicy: 'DENY'
             };
+
+            // Add compareAtPrice if it exists
+            if (variant.compare_at_price) {
+              variantInput.compareAtPrice = variant.compare_at_price.toString();
+            }
 
             // Add optionValues if they exist
             if (variant.optionValues && variant.optionValues.length > 0) {
@@ -199,6 +259,11 @@ class ProductImporter {
             productId: createdProduct.id,
             variants: variantInputs
           });
+
+          console.log('variants', JSON.stringify({
+            productId: createdProduct.id,
+            variants: variantInputs
+          }));
 
           if (variantResult.productVariantsBulkCreate.userErrors.length > 0) {
             const errors = variantResult.productVariantsBulkCreate.userErrors.map(e => `${e.field}: ${e.message}`);
