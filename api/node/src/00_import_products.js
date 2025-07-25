@@ -13,41 +13,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { shopifyConfig, pathConfig, getStoreConfig, validateConfig } from './config.js';
 import { ShopifyGraphQLClient } from './shopify-client.js';
-
-const PRODUCT_CREATE_MUTATION = `
-  mutation productCreate($input: ProductInput!) {
-    productCreate(input: $input) {
-      product {
-        id
-        handle
-        title
-        status
-        variants(first: 10) {
-          edges {
-            node {
-              id
-              sku
-              price
-            }
-          }
-        }
-        images(first: 20) {
-          edges {
-            node {
-              id
-              src
-              altText
-            }
-          }
-        }
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
+import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION } from '../queries/productCreate.js';
 
 class ProductImporter {
   constructor() {
@@ -92,78 +58,175 @@ class ProductImporter {
   }
 
   convertToShopifyInput(productData) {
-    const input = {
-      handle: productData.handle,
-      title: productData.title,
-      bodyHtml: productData.bodyHtml,
-      vendor: productData.vendor,
-      productType: productData.productType,
-      tags: productData.tags ? productData.tags.split(',').map(tag => tag.trim()) : [],
-      status: 'DRAFT', // Import as draft first
-      variants: productData.variants.map(variant => ({
-        sku: variant.sku,
-        price: variant.price?.toString(),
-        compareAtPrice: variant.compare_at_price?.toString(),
-        inventoryQuantity: variant.inventory_quantity || 0,
-        requiresShipping: variant.requires_shipping !== false,
-        taxable: variant.taxable !== false,
-        inventoryManagement: 'SHOPIFY',
-        inventoryPolicy: 'DENY',
-        ...(variant.option1 && { option1: variant.option1 })
-      })),
-      images: productData.images?.map(image => ({
-        src: image.src,
-        altText: image.alt || productData.title
-      })) || [],
-      options: productData.options?.map(option => ({
-        name: option.name,
-        values: [option.name] // Will be populated by variants
-      })) || []
+    // Extract product and media from the new JSON structure
+    const product = productData.product;
+    const media = productData.media || [];
+    const variants = productData.variants || [];
+    const options = product.productOptions || [];
+
+    // Include productOptions directly in product creation (valid in 2025-01 API)
+    const productInput = {
+      handle: product.handle,
+      title: product.title,
+      descriptionHtml: product.descriptionHtml,
+      vendor: product.vendor,
+      productType: product.productType,
+      tags: product.tags || [],
+      status: product.status || 'DRAFT'
     };
 
-    return input;
+    // Add productOptions if they exist
+    if (options && options.length > 0) {
+      productInput.productOptions = options.map(option => ({
+        name: option.name,
+        values: option.values.map(value => ({ 
+          name: typeof value === 'string' ? value : value.name 
+        })),
+        position: option.position
+      }));
+    }
+
+    // Add SEO if present
+    if (product.seo && (product.seo.title || product.seo.description)) {
+      productInput.seo = product.seo;
+    }
+
+    return {
+      product: productInput,
+      media: media,
+      variants: variants
+    };
+  }
+
+  // Helper function to create media URL to ID mapping from the response
+  createMediaMap(mediaResponse) {
+    const mediaMap = new Map();
+    
+    if (mediaResponse && mediaResponse.edges) {
+      mediaResponse.edges.forEach(edge => {
+        const mediaNode = edge.node;
+        if (mediaNode.originalSource && mediaNode.originalSource.url) {
+          mediaMap.set(mediaNode.originalSource.url, mediaNode.id);
+        }
+      });
+    }
+    
+    return mediaMap;
+  }
+
+  // Helper function to find media ID by source URL using the map
+  findMediaIdBySource(mediaMap, sourceUrl) {
+    return mediaMap.get(sourceUrl) || null;
   }
 
   async importProduct(productData, index, total) {
     try {
       const input = this.convertToShopifyInput(productData);
+
+      const handle = productData.product.handle;
+      const title = productData.product.title;
       
       if (shopifyConfig.dryRun) {
-        console.log(`   🔍 [DRY RUN] Would import: ${productData.handle}`);
+        console.log(`   🔍 [DRY RUN] Would import: ${handle}`);
         this.importResults.successful.push({
-          handle: productData.handle,
-          title: productData.title,
+          handle: handle,
+          title: title,
           status: 'dry_run',
           shopifyId: 'dry_run_id'
         });
         return;
       }
 
-      const result = await this.client.mutate(PRODUCT_CREATE_MUTATION, { input });
-      
-      if (result.productCreate.userErrors.length > 0) {
-        const errors = result.productCreate.userErrors.map(e => `${e.field}: ${e.message}`);
-        throw new Error(`Shopify errors: ${errors.join(', ')}`);
+      if (!this.client) {
+        throw new Error('Shopify client not initialized');
       }
 
-      const product = result.productCreate.product;
+      // Create product with media and options in single step
+      const productResult = await this.client.mutate(PRODUCT_CREATE_MUTATION, {
+        product: input.product,
+        media: input.media
+      });
+      
+      if (productResult.productCreate.userErrors.length > 0) {
+        const errors = productResult.productCreate.userErrors.map(e => `${e.field}: ${e.message}`);
+        throw new Error(`Product creation errors: ${errors.join(', ')}`);
+      }
+
+      const createdProduct = productResult.productCreate.product;
+      
+      // Create media mapping from the response
+      const mediaMap = this.createMediaMap(createdProduct.media);
+      
+      // Count created options and media
+      const optionCount = createdProduct.options ? createdProduct.options.length : 0;
+      const mediaCount = input.media.length;
+      let variantCount = 0;
+
+      // Create variants if there are any with valid SKUs
+      if (input.variants && input.variants.length > 0) {
+        const validVariants = input.variants.filter(v => v.sku && v.sku.trim());
+        
+        if (validVariants.length > 0) {
+          const variantInputs = validVariants.map(variant => {
+            const variantInput = {
+              sku: variant.sku,
+              price: variant.price?.toString() || '0.00',
+              compareAtPrice: variant.compare_at_price?.toString(),
+              inventoryQuantity: variant.inventory_quantity || 0,
+              requiresShipping: variant.requires_shipping !== false,
+              taxable: variant.taxable !== false,
+              inventoryManagement: 'SHOPIFY',
+              inventoryPolicy: 'DENY'
+            };
+
+            // Add optionValues if they exist
+            if (variant.optionValues && variant.optionValues.length > 0) {
+              variantInput.optionValues = variant.optionValues;
+            }
+
+            // Add variant image assignment if it exists
+            if (variant.image) {
+              const mediaId = this.findMediaIdBySource(mediaMap, variant.image);
+              if (mediaId) {
+                variantInput.mediaId = mediaId;
+              }
+            }
+
+            return variantInput;
+          });
+
+          const variantResult = await this.client.mutate(PRODUCT_VARIANTS_BULK_CREATE_MUTATION, {
+            productId: createdProduct.id,
+            variants: variantInputs
+          });
+
+          if (variantResult.productVariantsBulkCreate.userErrors.length > 0) {
+            const errors = variantResult.productVariantsBulkCreate.userErrors.map(e => `${e.field}: ${e.message}`);
+            console.warn(`   ⚠️  Variant creation warnings for ${handle}: ${errors.join(', ')}`);
+          }
+
+          variantCount = variantResult.productVariantsBulkCreate.productVariants.length;
+        }
+      }
+
       this.importResults.successful.push({
-        handle: productData.handle,
-        title: productData.title,
+        handle: handle,
+        title: title,
         status: 'imported',
-        shopifyId: product.id,
-        variantCount: product.variants.edges.length,
-        imageCount: product.images.edges.length
+        shopifyId: createdProduct.id,
+        optionCount: optionCount,
+        variantCount: variantCount,
+        imageCount: mediaCount
       });
 
-      console.log(`   ✅ [${index}/${total}] Imported: ${productData.handle} (ID: ${product.id})`);
+      console.log(`   ✅ [${index}/${total}] Imported: ${handle} (ID: ${createdProduct.id}, ${optionCount} options, ${variantCount} variants, ${mediaCount} images)`);
 
     } catch (error) {
-      console.error(`   ❌ [${index}/${total}] Failed: ${productData.handle} - ${error.message}`);
+      console.error(`   ❌ [${index}/${total}] Failed: ${productData.product?.handle || 'unknown'} - ${error.message}`);
       
       this.importResults.failed.push({
-        handle: productData.handle,
-        title: productData.title,
+        handle: productData.product?.handle || 'unknown',
+        title: productData.product?.title || 'unknown',
         status: 'failed',
         error: error.message
       });

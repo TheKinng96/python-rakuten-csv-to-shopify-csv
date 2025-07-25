@@ -32,8 +32,14 @@ class ImageAuditor:
         """
         Determine priority level for missing image based on product characteristics
         """
-        title_lower = product_title.lower()
-        tags_lower = product_tags.lower() if product_tags else ""
+        # Handle NaN values that come as float from pandas
+        if pd.isna(product_title):
+            product_title = ""
+        if pd.isna(product_tags):
+            product_tags = ""
+            
+        title_lower = str(product_title).lower()
+        tags_lower = str(product_tags).lower() if product_tags else ""
         combined_text = f"{title_lower} {tags_lower}"
         
         # High priority criteria
@@ -71,6 +77,17 @@ class ImageAuditor:
         product_title = main_row.get('Title', '')
         product_tags = main_row.get('Tags', '')
         
+        # Handle NaN values
+        if pd.isna(product_title):
+            product_title = ''
+        else:
+            product_title = str(product_title)
+            
+        if pd.isna(product_tags):
+            product_tags = ''
+        else:
+            product_tags = str(product_tags)
+        
         # Count unique images across all rows
         unique_images = set()
         for row in rows:
@@ -93,9 +110,11 @@ class ImageAuditor:
                         'has_image': False
                     }
                 
-                # Check if this variant has an associated image
+                # Check if this variant has an associated image (either Image Src or Variant Image)
                 image_src = row.get('Image Src', '')
-                if image_src and not pd.isna(image_src):
+                variant_image = row.get('Variant Image', '')
+                
+                if (image_src and not pd.isna(image_src)) or (variant_image and not pd.isna(variant_image)):
                     variants[variant_sku]['has_image'] = True
         
         variant_count = len(variants)
@@ -110,10 +129,13 @@ class ImageAuditor:
                 needs_attention = True
                 issues.append("no_product_images")
             
-            # Multiple variants but this variant has no specific image
-            if variant_count > 1 and not variant_info['has_image']:
+            # Check if this variant has no specific variant image
+            if not variant_info['has_image']:
                 needs_attention = True
-                issues.append("no_variant_image")
+                if variant_count > 1:
+                    issues.append("no_variant_image_multi_variant")
+                else:
+                    issues.append("no_variant_image_single_variant")
             
             if needs_attention:
                 priority = self.determine_priority(product_title, product_tags, variant_count)
@@ -271,7 +293,9 @@ def save_missing_images_csv(missing_image_records: List[Dict[str, Any]]) -> Path
             issues_list = record['issues']
             if 'no_product_images' in issues_list:
                 suggested_images = max(1, record['variantCount'])  # At least 1, ideally 1 per variant
-            elif 'no_variant_image' in issues_list:
+            elif 'no_variant_image_multi_variant' in issues_list:
+                suggested_images = 1  # Just need variant-specific image
+            elif 'no_variant_image_single_variant' in issues_list:
                 suggested_images = 1  # Just need variant-specific image
             else:
                 suggested_images = 1
@@ -280,8 +304,10 @@ def save_missing_images_csv(missing_image_records: List[Dict[str, Any]]) -> Path
             notes = []
             if 'no_product_images' in issues_list:
                 notes.append("No product images at all - urgent")
-            if 'no_variant_image' in issues_list:
-                notes.append("Missing variant-specific images")
+            if 'no_variant_image_multi_variant' in issues_list:
+                notes.append("Missing variant-specific image (multi-variant product)")
+            if 'no_variant_image_single_variant' in issues_list:
+                notes.append("Missing variant-specific image (single variant)")
             if record['variantCount'] > 3:
                 notes.append("Multi-variant product - consider color/style variations")
             

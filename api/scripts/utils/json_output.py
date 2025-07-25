@@ -141,20 +141,68 @@ def create_product_import_record(
     tags: str,
     variants: List[Dict[str, Any]],
     images: List[Dict[str, Any]],
-    options: List[Dict[str, Any]] = None
+    options: List[Dict[str, Any]] = None,
+    seo_title: str = "",
+    seo_description: str = ""
 ) -> Dict[str, Any]:
-    """Create a record for product import"""
+    """Create a record for product import matching 2025-07 ProductCreateInput structure"""
+    
+    # Convert tags string to array format
+    tags_array = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
+    
+    # Convert options to productOptions format
+    product_options = []
+    if options:
+        for position, option in enumerate(options, 1):
+            option_name = option.get('name')
+            # Skip if option name is NaN or empty
+            if option_name and not pd.isna(option_name) and option_name.strip():
+                option_values = option.get('values', [])
+                # Filter out NaN values and create value objects
+                valid_values = []
+                for value in option_values:
+                    if value and not pd.isna(value) and str(value).strip():
+                        valid_values.append({"name": str(value).strip()})
+                
+                # Only add option if it has valid values
+                if valid_values:
+                    product_options.append({
+                        "name": option_name.strip(),
+                        "values": valid_values,
+                        "position": position
+                    })
+    
+    # Convert images to media format
+    media = []
+    for image in images:
+        if image.get('src'):
+            media.append({
+                "originalSource": image['src'],
+                "alt": image.get('alt', ''),
+                "mediaContentType": "IMAGE"
+            })
+    
+    # Build SEO structure
+    seo = {}
+    if seo_title:
+        seo["title"] = seo_title
+    if seo_description:
+        seo["description"] = seo_description
+    
     return {
-        "handle": handle,
-        "title": title,
-        "bodyHtml": body_html,
-        "vendor": vendor,
-        "productType": product_type,
-        "tags": tags,
-        "published": True,
-        "variants": variants,
-        "images": images,
-        "options": options or [],
+        "product": {
+            "handle": handle,
+            "title": title,
+            "descriptionHtml": body_html,
+            "vendor": vendor,
+            "productType": product_type,
+            "tags": tags_array,
+            "status": "ACTIVE",
+            "productOptions": product_options,
+            "seo": seo if seo else None
+        },
+        "media": media,
+        "variants": variants,  # Keep for backward compatibility
         "variantCount": len(variants),
         "imageCount": len(images)
     }

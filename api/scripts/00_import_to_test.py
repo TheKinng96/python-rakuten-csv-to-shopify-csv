@@ -77,11 +77,72 @@ class CSVToShopifyConverter:
             'seo_description': self._safe_string(main_row.get('SEO Description', ''))
         }
         
+        # Collect all options first - need to inherit option names from first row that has them
+        options_map = {}
+        option_names = {}  # Track option names by position
+        
+        # First pass: collect option names
+        for row in product_rows:
+            # Get option names from any row that has them (usually first row)
+            option1_name = row.get('Option1 Name', '')
+            if option1_name and not pd.isna(option1_name):
+                option_names[1] = str(option1_name).strip()
+            
+            option2_name = row.get('Option2 Name', '')
+            if option2_name and not pd.isna(option2_name):
+                option_names[2] = str(option2_name).strip()
+            
+            option3_name = row.get('Option3 Name', '')
+            if option3_name and not pd.isna(option3_name):
+                option_names[3] = str(option3_name).strip()
+        
+        # Second pass: collect option values using the names we found
+        for row in product_rows:
+            # Process option1
+            if 1 in option_names:
+                option1_value = row.get('Option1 Value', '')
+                if option1_value and not pd.isna(option1_value):
+                    option_name = option_names[1]
+                    option_value = self._clean_option_value(option1_value)
+                    if option_name not in options_map:
+                        options_map[option_name] = set()
+                    options_map[option_name].add(option_value)
+            
+            # Process option2
+            if 2 in option_names:
+                option2_value = row.get('Option2 Value', '')
+                if option2_value and not pd.isna(option2_value):
+                    option_name = option_names[2]
+                    option_value = self._clean_option_value(option2_value)
+                    if option_name not in options_map:
+                        options_map[option_name] = set()
+                    options_map[option_name].add(option_value)
+            
+            # Process option3
+            if 3 in option_names:
+                option3_value = row.get('Option3 Value', '')
+                if option3_value and not pd.isna(option3_value):
+                    option_name = option_names[3]
+                    option_value = self._clean_option_value(option3_value)
+                    if option_name not in options_map:
+                        options_map[option_name] = set()
+                    options_map[option_name].add(option_value)
+        
+        # Convert options_map to proper format
+        product_data['options'] = []
+        for position, (option_name, values) in enumerate(options_map.items(), 1):
+            product_data['options'].append({
+                'name': option_name,
+                'values': sorted(list(values)),
+                'position': position
+            })
+        
         # Process variants
         variants = []
         for row in product_rows:
             variant_sku = row.get('Variant SKU', '')
-            if variant_sku:  # Only create variant if SKU exists
+            # Only create variant if SKU exists and is not NaN
+            if variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip():
                 variant = {
                     'sku': variant_sku,
                     'price': self._safe_float(row.get('Variant Price', '0')),
@@ -93,15 +154,54 @@ class CSVToShopifyConverter:
                     'inventory_policy': 'deny'
                 }
                 
-                # Add options if they exist
-                option1_name = row.get('Option1 Name', '')
-                option1_value = row.get('Option1 Value', '')
-                if option1_name and option1_value:
-                    variant['option1'] = option1_value
-                    if 'options' not in product_data:
-                        product_data['options'] = []
-                    if option1_name not in [opt.get('name') for opt in product_data['options']]:
-                        product_data['options'].append({'name': option1_name})
+                # Add variant image if it exists and differs from main images
+                variant_image = row.get('Variant Image', '')
+                if variant_image and not pd.isna(variant_image) and variant_image.strip():
+                    variant['image'] = variant_image.strip()
+                
+                # Build optionValues array for this variant using inherited option names
+                option_values = []
+                
+                # Process option1
+                if 1 in option_names:
+                    option1_value = row.get('Option1 Value', '')
+                    if option1_value and not pd.isna(option1_value):
+                        option_values.append({
+                            'optionName': option_names[1],
+                            'name': self._clean_option_value(option1_value)
+                        })
+                
+                # Process option2
+                if 2 in option_names:
+                    option2_value = row.get('Option2 Value', '')
+                    if option2_value and not pd.isna(option2_value):
+                        option_values.append({
+                            'optionName': option_names[2],
+                            'name': self._clean_option_value(option2_value)
+                        })
+                
+                # Process option3
+                if 3 in option_names:
+                    option3_value = row.get('Option3 Value', '')
+                    if option3_value and not pd.isna(option3_value):
+                        option_values.append({
+                            'optionName': option_names[3],
+                            'name': self._clean_option_value(option3_value)
+                        })
+                
+                # Every variant must have optionValues if there are any options defined
+                if option_names and option_values:
+                    variant['optionValues'] = option_values
+                elif option_names:
+                    # If no option values found but option names exist, create default option
+                    # This handles cases where variant has no specific option value
+                    default_options = []
+                    for pos in sorted(option_names.keys()):
+                        default_options.append({
+                            'optionName': option_names[pos],
+                            'name': 'Default'  # Fallback value
+                        })
+                    variant['optionValues'] = default_options
                 
                 variants.append(variant)
         
@@ -162,6 +262,24 @@ class CSVToShopifyConverter:
         if pd.isna(value) or value is None:
             return ''
         return str(value)
+    
+    def _clean_option_value(self, value) -> str:
+        """Clean option values - convert floats like 1.0, 2.0 to clean integers like 1, 2"""
+        if pd.isna(value) or value is None:
+            return ''
+        
+        str_value = str(value).strip()
+        
+        # Try to convert to float then int if it's a clean decimal
+        try:
+            float_val = float(str_value)
+            # If it's a whole number (like 1.0, 2.0), convert to integer string
+            if float_val.is_integer():
+                return str(int(float_val))
+            else:
+                return str_value
+        except (ValueError, TypeError):
+            return str_value
 
 
 def get_csv_files() -> List[Path]:
@@ -248,7 +366,9 @@ def convert_products_to_json(grouped_products: Dict[str, List[Dict[str, Any]]]) 
                 tags=product_data.get('tags', ''),
                 variants=product_data.get('variants', []),
                 images=product_data.get('images', []),
-                options=product_data.get('options', [])
+                options=product_data.get('options', []),
+                seo_title=product_data.get('seo_title', ''),
+                seo_description=product_data.get('seo_description', '')
             )
             
             product_records.append(product_record)
@@ -310,7 +430,7 @@ def main():
         # Phase 3: Validate and save JSON
         print(f"\n💾 Saving JSON data for GraphQL processing...")
         
-        required_fields = ['handle', 'title', 'variants', 'images']
+        required_fields = ['product', 'media']
         if not validate_json_structure(product_records, required_fields):
             print("❌ JSON validation failed")
             return 1
