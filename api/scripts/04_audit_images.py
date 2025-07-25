@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Script to audit products and variants for missing images and generate JSON data for GraphQL processing
+Script to audit products and variants for missing images and generate CSV list
 
 This script:
 1. Scans all CSV files to identify products and variants  
 2. Analyzes image availability from CSV data
-3. Generates JSON data for Node.js GraphQL operations
-4. Outputs: shared/missing_images_audit.json
+3. Generates CSV list for manual image attachment
+4. Outputs: reports/04_missing_images_list.csv
 """
+import csv
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -15,15 +16,6 @@ from typing import List, Dict, Any, Set
 
 import pandas as pd
 from tqdm import tqdm
-
-# Add utils to path
-sys.path.append(str(Path(__file__).parent))
-from utils.json_output import (
-    save_json_report,
-    create_missing_image_record,
-    log_processing_summary,
-    validate_json_structure
-)
 
 
 class ImageAuditor:
@@ -192,7 +184,7 @@ def load_and_group_csv_data() -> Dict[str, List[Dict[str, Any]]]:
 def analyze_csv_files_for_missing_images() -> List[Dict[str, Any]]:
     """
     Analyze CSV files to find products with missing images
-    Returns list of records for JSON output
+    Returns list of records for CSV output
     """
     print("🔍 Analyzing CSV files for missing images...")
     
@@ -249,11 +241,71 @@ def analyze_csv_files_for_missing_images() -> List[Dict[str, Any]]:
     
     return missing_image_records
 
+def save_missing_images_csv(missing_image_records: List[Dict[str, Any]]) -> Path:
+    """Save missing images list to CSV file"""
+    reports_dir = Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    csv_path = reports_dir / "04_missing_images_list.csv"
+    
+    print(f"\n💾 Saving CSV list to {csv_path}")
+    
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        fieldnames = [
+            'product_handle', 'product_title', 'variant_sku', 'priority_level',
+            'product_image_count', 'variant_count', 'variant_has_image',
+            'issues', 'product_tags', 'suggested_images_needed', 'notes'
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        # Sort by priority and then by product title
+        priority_order = {'high': 0, 'medium': 1, 'low': 2}
+        sorted_records = sorted(
+            missing_image_records,
+            key=lambda r: (priority_order.get(r['priorityLevel'], 1), r['productTitle'])
+        )
+        
+        for record in sorted_records:
+            # Determine suggested number of images needed
+            issues_list = record['issues']
+            if 'no_product_images' in issues_list:
+                suggested_images = max(1, record['variantCount'])  # At least 1, ideally 1 per variant
+            elif 'no_variant_image' in issues_list:
+                suggested_images = 1  # Just need variant-specific image
+            else:
+                suggested_images = 1
+            
+            # Create helpful notes
+            notes = []
+            if 'no_product_images' in issues_list:
+                notes.append("No product images at all - urgent")
+            if 'no_variant_image' in issues_list:
+                notes.append("Missing variant-specific images")
+            if record['variantCount'] > 3:
+                notes.append("Multi-variant product - consider color/style variations")
+            
+            writer.writerow({
+                'product_handle': record['productHandle'],
+                'product_title': record['productTitle'],
+                'variant_sku': record['variantSku'],
+                'priority_level': record['priorityLevel'],
+                'product_image_count': record['productImageCount'],
+                'variant_count': record['variantCount'],
+                'variant_has_image': record['variantHasImage'],
+                'issues': ', '.join(issues_list),
+                'product_tags': record['productTags'],
+                'suggested_images_needed': suggested_images,
+                'notes': '; '.join(notes)
+            })
+    
+    return csv_path
+
 
 def main():
     """Main execution function"""
     print("=" * 70)
-    print("🔍 MISSING IMAGES AUDIT (JSON OUTPUT)")
+    print("🔍 MISSING IMAGES AUDIT (CSV LIST OUTPUT)")
     print("=" * 70)
     
     try:
@@ -262,23 +314,18 @@ def main():
         
         if not missing_image_records:
             print("\n✅ All products have adequate images!")
-            # Save empty JSON file for consistency
-            save_json_report([], "missing_images_audit.json", "No missing image issues found in CSV data")
+            # Create empty CSV file for consistency
+            reports_dir = Path(__file__).parent.parent / "reports"
+            reports_dir.mkdir(exist_ok=True)
+            csv_path = reports_dir / "04_missing_images_list.csv"
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['message'])
+                writer.writerow(['No missing image issues found in CSV data'])
             return 0
         
-        # Phase 2: Validate and save JSON
-        print(f"\n💾 Saving JSON data for GraphQL processing...")
-        
-        required_fields = ['productHandle', 'variantSku', 'productTitle', 'priorityLevel']
-        if not validate_json_structure(missing_image_records, required_fields):
-            print("❌ JSON validation failed")
-            return 1
-        
-        json_path = save_json_report(
-            missing_image_records,
-            "missing_images_audit.json",
-            f"Products with missing images for attention via GraphQL ({len(missing_image_records)} issues)"
-        )
+        # Phase 2: Save CSV list
+        csv_path = save_missing_images_csv(missing_image_records)
         
         # Phase 3: Generate summary list
         print(f"\n📋 Generating summary list...")
@@ -325,9 +372,12 @@ def main():
             print(f"... and {len(summary_list)-20} more products")
         
         print(f"\n🎉 Analysis completed successfully!")
-        print(f"   📄 JSON data saved to: {json_path}")
-        print(f"   🚀 Ready for GraphQL processing")
-        print(f"\n💡 Next step: cd node && npm run audit-images")
+        print(f"   📄 CSV list saved to: {csv_path}")
+        print(f"   📝 Use this CSV to search for correct images and attach them")
+        print(f"\n💡 Next steps:")
+        print(f"   1. Open the CSV file to see products needing images")
+        print(f"   2. Search for and attach appropriate images")
+        print(f"   3. Use Node.js GraphQL to upload images to Shopify")
         
         return 0
         

@@ -66,15 +66,15 @@ class CSVToShopifyConverter:
         
         # Basic product data
         product_data = {
-            'handle': main_row.get('Handle', ''),
-            'title': main_row.get('Title', ''),
-            'body_html': main_row.get('Body (HTML)', ''),
-            'vendor': main_row.get('Vendor', ''),
-            'product_type': main_row.get('Type', ''),
-            'tags': main_row.get('Tags', ''),
+            'handle': self._safe_string(main_row.get('Handle', '')),
+            'title': self._safe_string(main_row.get('Title', '')),
+            'body_html': self._safe_string(main_row.get('Body (HTML)', '')),
+            'vendor': self._safe_string(main_row.get('Vendor', '')),
+            'product_type': self._safe_string(main_row.get('Type', '')),
+            'tags': self._safe_string(main_row.get('Tags', '')),
             'published': str(main_row.get('Published', 'true')).lower() == 'true',
-            'seo_title': main_row.get('SEO Title', ''),
-            'seo_description': main_row.get('SEO Description', '')
+            'seo_title': self._safe_string(main_row.get('SEO Title', '')),
+            'seo_description': self._safe_string(main_row.get('SEO Description', ''))
         }
         
         # Process variants
@@ -127,7 +127,7 @@ class CSVToShopifyConverter:
                 image = {
                     'src': image_src,
                     'position': self._safe_int(row.get('Image Position', '1')),
-                    'alt': row.get('Image Alt Text', '')
+                    'alt': self._safe_string(row.get('Image Alt Text', ''))
                 }
                 
                 # Avoid duplicate images
@@ -156,6 +156,12 @@ class CSVToShopifyConverter:
             return int(float(str(value)))
         except (ValueError, TypeError):
             return 0
+    
+    def _safe_string(self, value) -> str:
+        """Safely convert value to string, handling NaN values"""
+        if pd.isna(value) or value is None:
+            return ''
+        return str(value)
 
 
 def get_csv_files() -> List[Path]:

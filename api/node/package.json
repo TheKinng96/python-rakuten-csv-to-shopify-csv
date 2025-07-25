@@ -10,6 +10,7 @@
     "remove-ss": "node src/01_remove_ss_images.js",
     "fix-tables": "node src/02_fix_html_tables.js",
     "clean-rakuten": "node src/03_clean_rakuten.js",
+    "insert-images": "node src/04_insert_images.js",
     "test": "node src/test_connection.js"
   },
   "dependencies": {
@@ -17,7 +18,8 @@
     "dotenv": "^16.3.1",
     "csv-parser": "^3.0.0",
     "csv-writer": "^1.6.0",
-    "commander": "^11.0.0"
+    "commander": "^11.0.0",
+    "jsdom": "^23.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0"

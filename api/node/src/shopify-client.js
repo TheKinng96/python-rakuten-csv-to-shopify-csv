@@ -1,11 +1,178 @@
 /**
- * Shopify GraphQL client wrapper
+ * Shopify GraphQL client wrapper with rate limiting and error handling
  */
 import { createAdminApiClient } from '@shopify/admin-api-client';
 import { getStoreConfig, shopifyConfig } from './config.js';
 
 /**
- * Create Shopify GraphQL client
+ * Enhanced Shopify GraphQL Client Class
+ */
+export class ShopifyGraphQLClient {
+  constructor(useTestStore = true) {
+    const config = getStoreConfig(useTestStore);
+    
+    this.client = createAdminApiClient({
+      storeDomain: config.storeDomain,
+      accessToken: config.accessToken,
+      apiVersion: config.apiVersion,
+    });
+    
+    this.requestQueue = [];
+    this.isProcessingQueue = false;
+    this.lastRequestTime = 0;
+    this.minRequestInterval = 1000 / shopifyConfig.maxRequestsPerSecond;
+  }
+
+  /**
+   * Test connection to Shopify
+   */
+  async testConnection() {
+    const query = `
+      query {
+        shop {
+          name
+          email
+          plan { 
+            displayName
+          }
+        }
+      }
+    `;
+
+    try {
+      const result = await this.query(query);
+      console.log(`🏪 Connected to: ${result.shop.name} (${result.shop.domain})`);
+      console.log(`📋 Plan: ${result.shop.plan.displayName}`);
+      return result;
+    } catch (error) {
+      throw new Error(`Connection test failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Execute GraphQL query with rate limiting
+   */
+  async query(query, variables = {}) {
+    return this.makeRequest('query', query, variables);
+  }
+
+  /**
+   * Execute GraphQL mutation with rate limiting
+   */
+  async mutate(mutation, variables = {}) {
+    return this.makeRequest('mutation', mutation, variables);
+  }
+
+  /**
+   * Make rate-limited GraphQL request
+   */
+  async makeRequest(operation, queryString, variables) {
+    return new Promise((resolve, reject) => {
+      this.requestQueue.push({
+        operation,
+        queryString,
+        variables,
+        resolve,
+        reject,
+        retries: 0
+      });
+
+      this.processQueue();
+    });
+  }
+
+  /**
+   * Process the request queue with rate limiting
+   */
+  async processQueue() {
+    if (this.isProcessingQueue || this.requestQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.requestQueue.length > 0) {
+      const request = this.requestQueue.shift();
+      
+      try {
+        // Rate limiting
+        const timeSinceLastRequest = Date.now() - this.lastRequestTime;
+        if (timeSinceLastRequest < this.minRequestInterval) {
+          await new Promise(resolve => 
+            setTimeout(resolve, this.minRequestInterval - timeSinceLastRequest)
+          );
+        }
+
+        this.lastRequestTime = Date.now();
+
+        // Execute request
+        const result = await this.executeRequest(request);
+        request.resolve(result);
+
+      } catch (error) {
+        // Handle retries for rate limiting and network errors
+        if (this.shouldRetry(error, request.retries)) {
+          request.retries++;
+          console.warn(`⚠️ Retrying request (${request.retries}/3): ${error.message}`);
+          
+          // Exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, request.retries - 1), 10000);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          this.requestQueue.unshift(request); // Add back to front of queue
+        } else {
+          request.reject(error);
+        }
+      }
+    }
+
+    this.isProcessingQueue = false;
+  }
+
+  /**
+   * Execute the actual GraphQL request
+   */
+  async executeRequest(request) {
+    const { queryString, variables } = request;
+
+    const response = await this.client.request(queryString, { variables });
+
+    // Check for GraphQL errors
+    if (response.errors && response.errors.length > 0) {
+      const errorMessages = response.errors.map(e => e.message).join(', ');
+      throw new Error(`GraphQL errors: ${errorMessages}`);
+    }
+
+    return response.data;
+  }
+
+  /**
+   * Determine if request should be retried
+   */
+  shouldRetry(error, retryCount) {
+    if (retryCount >= 3) return false;
+
+    // Retry on rate limiting, network errors, or temporary server errors
+    const retryableErrors = [
+      'rate limit',
+      'throttle',
+      'network',
+      'timeout',
+      'connection',
+      'ECONNRESET',
+      'ETIMEDOUT',
+      '503', // Service Unavailable
+      '502', // Bad Gateway
+      '500', // Internal Server Error
+    ];
+
+    const errorMessage = error.message.toLowerCase();
+    return retryableErrors.some(retryable => errorMessage.includes(retryable));
+  }
+}
+
+/**
+ * Create Shopify GraphQL client (legacy function)
  */
 export function createShopifyClient(useTestStore = true) {
   const config = getStoreConfig(useTestStore);

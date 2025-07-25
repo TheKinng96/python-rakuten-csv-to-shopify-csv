@@ -2,9 +2,32 @@
 Utility functions for generating JSON output files for Node.js GraphQL operations
 """
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+import pandas as pd
+
+
+class SafeJSONEncoder(json.JSONEncoder):
+    """JSON encoder that handles NaN, inf, and pandas NA values"""
+    def encode(self, obj):
+        # Clean the data before encoding
+        cleaned_obj = self._clean_data(obj)
+        return super().encode(cleaned_obj)
+    
+    def _clean_data(self, obj):
+        """Recursively clean data to handle NaN and other problematic values"""
+        if isinstance(obj, dict):
+            return {key: self._clean_data(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._clean_data(item) for item in obj]
+        elif pd.isna(obj):
+            return None
+        elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        else:
+            return obj
 
 
 def save_json_report(data: List[Dict[str, Any]], filename: str, description: str = "") -> Path:
@@ -29,7 +52,7 @@ def save_json_report(data: List[Dict[str, Any]], filename: str, description: str
     # Save JSON file
     json_path = shared_dir / filename
     with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+        json.dump(report, f, indent=2, ensure_ascii=False, cls=SafeJSONEncoder)
     
     print(f"✅ Saved JSON report: {json_path}")
     print(f"   📊 {len(data)} records")

@@ -41,7 +41,7 @@ export const pathConfig = {
   // Use existing data and reports directories
   csvDataPath: join(__dirname, '../../data'),
   reportsPath: join(__dirname, '../../reports'),
-  sharedPath: join(__dirname, '../shared'),
+  sharedPath: join(__dirname, '../../shared'),
   queriesPath: join(__dirname, '../queries'),
   
   // Python scripts path for integration
