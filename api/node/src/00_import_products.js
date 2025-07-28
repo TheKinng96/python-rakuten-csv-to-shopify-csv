@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { shopifyConfig, pathConfig, getStoreConfig, validateConfig } from './config.js';
 import { ShopifyGraphQLClient } from './shopify-client.js';
-import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION, LOCATIONS_QUERY } from '../queries/productCreate.js';
+import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION, PRODUCT_VARIANT_UPDATE_MUTATION, LOCATIONS_QUERY } from '../queries/productCreate.js';
 
 class ProductImporter {
   constructor() {
@@ -57,7 +57,6 @@ class ProductImporter {
     try {
       const locationsResult = await this.client.query(LOCATIONS_QUERY);
       
-      console.log(locationsResult);
       if (!locationsResult.locations?.edges?.length) {
         throw new Error('No locations found in the shop');
       }
@@ -148,25 +147,34 @@ class ProductImporter {
     };
   }
 
-  // Helper function to create media URL to ID mapping from the response
-  createMediaMap(mediaResponse) {
-    const mediaMap = new Map();
+  // Helper function to create media order to ID mapping from the response
+  createMediaIndexMap(mediaResponse) {
+    const mediaIndexMap = new Map();
     
     if (mediaResponse && mediaResponse.edges) {
-      mediaResponse.edges.forEach(edge => {
+      mediaResponse.edges.forEach((edge, index) => {
         const mediaNode = edge.node;
-        if (mediaNode.originalSource && mediaNode.originalSource.url) {
-          mediaMap.set(mediaNode.originalSource.url, mediaNode.id);
+        if (mediaNode.id) {
+          mediaIndexMap.set(index, mediaNode.id);
         }
       });
     }
     
-    return mediaMap;
+    return mediaIndexMap;
   }
 
-  // Helper function to find media ID by source URL using the map
-  findMediaIdBySource(mediaMap, sourceUrl) {
-    return mediaMap.get(sourceUrl) || null;
+  // Helper function to find media ID by index in the media array
+  findMediaIdByIndex(mediaIndexMap, mediaArray, imageUrl) {
+    if (!imageUrl || !mediaArray) return null;
+    
+    // Find the index of this image in our original media array
+    const mediaIndex = mediaArray.findIndex(media => media.originalSource === imageUrl);
+    
+    if (mediaIndex !== -1) {
+      return mediaIndexMap.get(mediaIndex) || null;
+    }
+    
+    return null;
   }
 
   async importProduct(productData, index, total) {
@@ -204,73 +212,129 @@ class ProductImporter {
 
       const createdProduct = productResult.productCreate.product;
       
-      // Create media mapping from the response
-      const mediaMap = this.createMediaMap(createdProduct.media);
+      // Create media index mapping from the response (using order/index instead of URL)
+      const mediaIndexMap = this.createMediaIndexMap(createdProduct.media);
       
       // Count created options and media
       const optionCount = createdProduct.options ? createdProduct.options.length : 0;
       const mediaCount = input.media.length;
       let variantCount = 0;
 
+      // Get the default variant that was auto-created by Shopify
+      const defaultVariant = createdProduct.variants && createdProduct.variants.edges.length > 0 
+        ? createdProduct.variants.edges[0].node 
+        : null;
+
       // Create variants if there are any with valid SKUs
       if (input.variants && input.variants.length > 0) {
         const validVariants = input.variants.filter(v => v.sku && v.sku.trim());
         
         if (validVariants.length > 0) {
-          const variantInputs = validVariants.map(variant => {
-            const variantInput = {
+          // Update the first variant (auto-created by Shopify)
+          const firstVariant = validVariants[0];
+          
+          if (defaultVariant) {
+            const firstVariantUpdateInput = {
+              id: defaultVariant.id,
               inventoryItem: {
-                sku: variant.sku,
-                requiresShipping: variant.requires_shipping !== false
+                sku: firstVariant.sku,
+                requiresShipping: firstVariant.requires_shipping !== false
               },
-              price: variant.price?.toString() || '0.00',
+              price: firstVariant.price?.toString() || '0.00',
               inventoryQuantities: [
                 {
-                  availableQuantity: variant.inventory_quantity || 0,
+                  availableQuantity: firstVariant.inventory_quantity || 0,
                   locationId: this.shopLocationId
                 }
               ],
-              taxable: variant.taxable !== false,
+              taxable: firstVariant.taxable !== false,
               inventoryPolicy: 'DENY'
             };
 
             // Add compareAtPrice if it exists
-            if (variant.compare_at_price) {
-              variantInput.compareAtPrice = variant.compare_at_price.toString();
+            if (firstVariant.compare_at_price) {
+              firstVariantUpdateInput.compareAtPrice = firstVariant.compare_at_price.toString();
             }
 
             // Add optionValues if they exist
-            if (variant.optionValues && variant.optionValues.length > 0) {
-              variantInput.optionValues = variant.optionValues;
+            if (firstVariant.optionValues && firstVariant.optionValues.length > 0) {
+              firstVariantUpdateInput.optionValues = firstVariant.optionValues;
             }
 
             // Add variant image assignment if it exists
-            if (variant.image) {
-              const mediaId = this.findMediaIdBySource(mediaMap, variant.image);
+            if (firstVariant.image) {
+              const mediaId = this.findMediaIdByIndex(mediaIndexMap, input.media, firstVariant.image);
               if (mediaId) {
-                variantInput.mediaId = mediaId;
+                firstVariantUpdateInput.mediaId = mediaId;
               }
             }
 
-            return variantInput;
-          });
+            const updateResult = await this.client.mutate(PRODUCT_VARIANT_UPDATE_MUTATION, {
+              input: firstVariantUpdateInput
+            });
 
-          const variantResult = await this.client.mutate(PRODUCT_VARIANTS_BULK_CREATE_MUTATION, {
-            productId: createdProduct.id,
-            variants: variantInputs
-          });
+            if (updateResult.productVariantUpdate.userErrors.length > 0) {
+              const errors = updateResult.productVariantUpdate.userErrors.map(e => `${e.field}: ${e.message}`);
+              console.warn(`   ⚠️  First variant update warnings for ${handle}: ${errors.join(', ')}`);
+            }
 
-          console.log('variants', JSON.stringify({
-            productId: createdProduct.id,
-            variants: variantInputs
-          }));
-
-          if (variantResult.productVariantsBulkCreate.userErrors.length > 0) {
-            const errors = variantResult.productVariantsBulkCreate.userErrors.map(e => `${e.field}: ${e.message}`);
-            console.warn(`   ⚠️  Variant creation warnings for ${handle}: ${errors.join(', ')}`);
+            variantCount = 1; // Updated first variant
           }
 
-          variantCount = variantResult.productVariantsBulkCreate.productVariants.length;
+          // Create remaining variants (if any)
+          const remainingVariants = validVariants.slice(1);
+          
+          if (remainingVariants.length > 0) {
+            const variantInputs = remainingVariants.map(variant => {
+              const variantInput = {
+                inventoryItem: {
+                  sku: variant.sku,
+                  requiresShipping: variant.requires_shipping !== false
+                },
+                price: variant.price?.toString() || '0.00',
+                inventoryQuantities: [
+                  {
+                    availableQuantity: variant.inventory_quantity || 0,
+                    locationId: this.shopLocationId
+                  }
+                ],
+                taxable: variant.taxable !== false,
+                inventoryPolicy: 'DENY'
+              };
+
+              // Add compareAtPrice if it exists
+              if (variant.compare_at_price) {
+                variantInput.compareAtPrice = variant.compare_at_price.toString();
+              }
+
+              // Add optionValues if they exist
+              if (variant.optionValues && variant.optionValues.length > 0) {
+                variantInput.optionValues = variant.optionValues;
+              }
+
+              // Add variant image assignment if it exists
+              if (variant.image) {
+                const mediaId = this.findMediaIdByIndex(mediaIndexMap, input.media, variant.image);
+                if (mediaId) {
+                  variantInput.mediaId = mediaId;
+                }
+              }
+
+              return variantInput;
+            });
+
+            const variantResult = await this.client.mutate(PRODUCT_VARIANTS_BULK_CREATE_MUTATION, {
+              productId: createdProduct.id,
+              variants: variantInputs
+            });
+
+            if (variantResult.productVariantsBulkCreate.userErrors.length > 0) {
+              const errors = variantResult.productVariantsBulkCreate.userErrors.map(e => `${e.field}: ${e.message}`);
+              console.warn(`   ⚠️  Variant creation warnings for ${handle}: ${errors.join(', ')}`);
+            }
+
+            variantCount += variantResult.productVariantsBulkCreate.productVariants.length;
+          }
         }
       }
 

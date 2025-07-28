@@ -263,6 +263,51 @@ def analyze_csv_files_for_missing_images() -> List[Dict[str, Any]]:
     
     return missing_image_records
 
+def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any]]]) -> Path:
+    """Save CSV of rows that have SKU but no Variant Image"""
+    reports_dir = Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    csv_path = reports_dir / "04_sku_no_variant_image.csv"
+    
+    print(f"\n💾 Saving rows with SKU but no Variant Image to {csv_path}")
+    
+    matching_rows = []
+    
+    # Process all products to find rows with SKU but no Variant Image
+    for handle, product_rows in grouped_products.items():
+        for row in product_rows:
+            variant_sku = row.get('Variant SKU', '')
+            variant_image = row.get('Variant Image', '')
+            
+            # Check if has SKU but no Variant Image
+            has_sku = variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip()
+            has_variant_image = variant_image and not pd.isna(variant_image) and str(variant_image).strip()
+            
+            if has_sku and not has_variant_image:
+                matching_rows.append(row)
+    
+    print(f"   📊 Found {len(matching_rows)} rows with SKU but no Variant Image")
+    
+    if matching_rows:
+        # Get all column names from the first row
+        fieldnames = list(matching_rows[0].keys())
+        
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for row in matching_rows:
+                writer.writerow(row)
+    else:
+        # Create empty file with message
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['message'])
+            writer.writerow(['No rows found with SKU but missing Variant Image'])
+    
+    return csv_path
+
 def save_missing_images_csv(missing_image_records: List[Dict[str, Any]]) -> Path:
     """Save missing images list to CSV file"""
     reports_dir = Path(__file__).parent.parent / "reports"
@@ -335,8 +380,62 @@ def main():
     print("=" * 70)
     
     try:
-        # Phase 1: Analyze CSV files
-        missing_image_records = analyze_csv_files_for_missing_images()
+        # Phase 1: Load CSV data
+        grouped_products = load_and_group_csv_data()
+        
+        if not grouped_products:
+            print("❌ No products found in CSV files")
+            return 1
+        
+        # Phase 2: Save rows with SKU but no Variant Image
+        sku_csv_path = save_sku_no_variant_image_csv(grouped_products)
+        
+        # Phase 3: Analyze CSV files for missing images
+        print("🔍 Analyzing CSV files for missing images...")
+        
+        auditor = ImageAuditor()
+        missing_image_records = []
+        total_products = len(grouped_products)
+        processed_count = 0
+        issues_found = 0
+        
+        print(f"🔄 Auditing {total_products:,} products for image issues...")
+        
+        for handle, product_rows in tqdm(grouped_products.items(), desc="Auditing products"):
+            try:
+                # Audit this product's images
+                audit_results = auditor.audit_product_from_csv_data((handle, product_rows))
+                
+                if audit_results:
+                    missing_image_records.extend(audit_results)
+                    issues_found += len(audit_results)
+                
+                processed_count += 1
+                
+                # Progress logging every 1000 products
+                if processed_count % 1000 == 0:
+                    print(f"   📈 Processed {processed_count:,}/{total_products:,} products "
+                          f"({issues_found} issues found)")
+                    
+            except Exception as e:
+                print(f"   ❌ Error auditing product {handle}: {e}")
+                continue
+        
+        print(f"\n📊 Analysis Summary:")
+        print(f"   📄 Products processed: {processed_count:,}")
+        print(f"   🎯 Products with image issues: {len(set(r['productHandle'] for r in missing_image_records))}")
+        print(f"   🔍 Total issues found: {issues_found}")
+        
+        # Show priority distribution
+        priority_counts = {}
+        for record in missing_image_records:
+            priority = record['priorityLevel']
+            priority_counts[priority] = priority_counts.get(priority, 0) + 1
+        
+        print(f"   📈 Priority distribution:")
+        for priority in ['high', 'medium', 'low']:
+            count = priority_counts.get(priority, 0)
+            print(f"      - {priority}: {count}")
         
         if not missing_image_records:
             print("\n✅ All products have adequate images!")
@@ -348,10 +447,9 @@ def main():
                 writer = csv.writer(f)
                 writer.writerow(['message'])
                 writer.writerow(['No missing image issues found in CSV data'])
-            return 0
-        
-        # Phase 2: Save CSV list
-        csv_path = save_missing_images_csv(missing_image_records)
+        else:
+            # Phase 4: Save CSV list
+            csv_path = save_missing_images_csv(missing_image_records)
         
         # Phase 3: Generate summary list
         print(f"\n📋 Generating summary list...")
@@ -398,10 +496,13 @@ def main():
             print(f"... and {len(summary_list)-20} more products")
         
         print(f"\n🎉 Analysis completed successfully!")
-        print(f"   📄 CSV list saved to: {csv_path}")
-        print(f"   📝 Use this CSV to search for correct images and attach them")
+        print(f"   📄 SKU without Variant Image CSV: {sku_csv_path}")
+        if not missing_image_records:
+            print(f"   📄 Missing images CSV: (empty - no issues found)")
+        else:
+            print(f"   📄 Missing images CSV: {csv_path}")
         print(f"\n💡 Next steps:")
-        print(f"   1. Open the CSV file to see products needing images")
+        print(f"   1. Check {sku_csv_path.name} for rows with SKU but no Variant Image")
         print(f"   2. Search for and attach appropriate images")
         print(f"   3. Use Node.js GraphQL to upload images to Shopify")
         

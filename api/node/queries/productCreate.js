@@ -32,6 +32,17 @@ export const PRODUCT_CREATE_MUTATION = `
             name
           }
         }
+        variants(first: 5) {
+          edges {
+            node {
+              id
+              price
+              inventoryItem {
+                id
+              }
+            }
+          }
+        }
         media(first: 10) {
           edges {
             node {
@@ -63,6 +74,37 @@ export const PRODUCT_OPTIONS_CREATE_MUTATION = `
         optionValues {
           id
           name
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+// need to use this one https://shopify.dev/docs/api/admin-graphql/latest/mutations/productVariantsBulkUpdate#argument-variants
+export const PRODUCT_VARIANT_UPDATE_MUTATION = `
+  mutation($input: ProductVariantInput!) {
+    productVariantUpdate(input: $input) {
+      productVariant {
+        id
+        price
+        compareAtPrice
+        inventoryItem {
+          id
+          sku
+          requiresShipping
+        }
+        inventoryQuantity
+        selectedOptions {
+          name
+          value
+        }
+        image {
+          id
+          url
         }
       }
       userErrors {

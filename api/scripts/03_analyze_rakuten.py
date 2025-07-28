@@ -10,6 +10,7 @@ This script:
 """
 import re
 import sys
+import json
 from pathlib import Path
 from typing import List, Dict, Any, Set
 
@@ -44,6 +45,80 @@ class ECUpPatternDiscovery:
             'Similar': 'similar',
             'SameTime': 'sametime',
             'Resale': 'resale'
+        }
+    
+    def clean_ec_up_content(self, html_content: str) -> Dict[str, Any]:
+        """
+        Remove all EC-UP patterns from HTML content
+        Returns cleaning results and cleaned HTML
+        """
+        if not html_content or pd.isna(html_content):
+            return {
+                'cleanedHtml': '',
+                'patternsRemoved': [],
+                'bytesRemoved': 0,
+                'changesMade': False,
+                'originalLength': 0,
+                'cleanedLength': 0
+            }
+        
+        original_html = str(html_content)
+        cleaned_html = original_html
+        patterns_removed = []
+        bytes_removed = 0
+        
+        # Remove all EC-UP patterns
+        def replace_pattern(match):
+            nonlocal bytes_removed, patterns_removed
+            
+            pattern_name = match.group(1)
+            pattern_number = match.group(2)
+            content_block = match.group(3)
+            full_match = match.group(0)
+            
+            pattern_id = f"EC-UP_{pattern_name}_{pattern_number}"
+            
+            patterns_removed.append({
+                'patternId': pattern_id,
+                'patternName': pattern_name,
+                'patternNumber': pattern_number,
+                'patternType': self.known_patterns.get(pattern_name, 'unknown'),
+                'contentLength': len(content_block),
+                'fullMatchLength': len(full_match),
+                'contentPreview': content_block[:100] + ('...' if len(content_block) > 100 else '')
+            })
+            
+            bytes_removed += len(full_match)
+            return ''  # Remove the entire EC-UP block
+        
+        cleaned_html = self.ec_up_pattern.sub(replace_pattern, cleaned_html)
+        
+        # Clean up any remaining EC-UP artifacts
+        artifacts = [
+            r'<!--EC-UP_[^>]*-->',  # Orphaned EC-UP comments
+            r'\s*<!\[endif\]-->',   # IE conditional comments often used with EC-UP
+            r'<!--\[if[^>]*>\s*<!\[endif\]-->'  # Empty IE conditionals
+        ]
+        
+        for artifact_pattern in artifacts:
+            matches = re.findall(artifact_pattern, cleaned_html, re.IGNORECASE)
+            for match in matches:
+                bytes_removed += len(match)
+            cleaned_html = re.sub(artifact_pattern, '', cleaned_html, flags=re.IGNORECASE)
+        
+        # Clean up excessive whitespace left behind
+        cleaned_html = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_html)  # Multiple empty lines to double
+        cleaned_html = cleaned_html.strip()  # Trim start/end whitespace
+        cleaned_html = re.sub(r'\s+(<\/)', r'\1', cleaned_html)  # Remove space before closing tags
+        
+        return {
+            'cleanedHtml': cleaned_html,
+            'patternsRemoved': patterns_removed,
+            'bytesRemoved': bytes_removed,
+            'changesMade': len(patterns_removed) > 0,
+            'originalLength': len(original_html),
+            'cleanedLength': len(cleaned_html),
+            'compressionRatio': round((1 - len(cleaned_html) / len(original_html)) * 100, 1) if len(original_html) > 0 else 0
         }
     
     def discover_patterns_in_html(self, html_content: str) -> List[Dict[str, Any]]:
@@ -161,15 +236,16 @@ def get_csv_files() -> List[Path]:
     return list(data_dir.glob("products_export_*.csv"))
 
 
-def analyze_csv_files_for_rakuten_content() -> List[Dict[str, Any]]:
+def analyze_csv_files_for_rakuten_content() -> tuple[List[Dict[str, Any]], Set[str]]:
     """
-    Analyze CSV files to discover all EC-UP patterns
-    Returns list of records for JSON output
+    Analyze CSV files to discover all EC-UP patterns and clean HTML content
+    Returns tuple of (records_list, affected_handles_set)
     """
-    print("🔍 Discovering EC-UP patterns in CSV files...")
+    print("🔍 Discovering and cleaning EC-UP patterns in CSV files...")
     
     discoverer = ECUpPatternDiscovery()
     rakuten_records = []
+    affected_handles = set()
     csv_files = get_csv_files()
     total_rows = 0
     total_patterns = 0
@@ -199,29 +275,46 @@ def analyze_csv_files_for_rakuten_content() -> List[Dict[str, Any]]:
                     if pd.isna(body_html) or not body_html or pd.isna(handle) or not handle:
                         continue
                     
-                    # Discover EC-UP patterns in this product
-                    patterns_found = discoverer.discover_patterns_in_html(str(body_html))
+                    # Clean EC-UP content from HTML
+                    cleaning_result = discoverer.clean_ec_up_content(str(body_html))
                     
-                    if patterns_found:
-                        total_patterns += len(patterns_found)
+                    if cleaning_result['changesMade']:
+                        total_patterns += len(cleaning_result['patternsRemoved'])
+                        affected_handles.add(handle)
                         
                         if handle not in file_records:
                             file_records[handle] = {
                                 'productHandle': handle,
                                 'productId': None,  # Will be filled by Node.js
-                                'currentHtml': str(body_html),
-                                'htmlLength': len(str(body_html)),
-                                'patternsFound': patterns_found,
-                                'totalPatterns': len(patterns_found),
-                                'estimatedCleanupSize': sum(p['contentLength'] for p in patterns_found)
+                                'originalHtml': str(body_html),
+                                'cleanedHtml': cleaning_result['cleanedHtml'],
+                                'originalLength': cleaning_result['originalLength'],
+                                'cleanedLength': cleaning_result['cleanedLength'],
+                                'bytesRemoved': cleaning_result['bytesRemoved'],
+                                'compressionRatio': cleaning_result['compressionRatio'],
+                                'patternsRemoved': cleaning_result['patternsRemoved'],
+                                'totalPatterns': len(cleaning_result['patternsRemoved']),
+                                'estimatedCleanupSize': sum(p['contentLength'] for p in cleaning_result['patternsRemoved'])
                             }
                         else:
                             # Merge patterns if multiple rows for same product
-                            file_records[handle]['patternsFound'].extend(patterns_found)
-                            file_records[handle]['totalPatterns'] = len(file_records[handle]['patternsFound'])
+                            existing_patterns = file_records[handle]['patternsRemoved']
+                            new_patterns = cleaning_result['patternsRemoved']
+                            
+                            # Avoid duplicates by checking pattern IDs
+                            existing_ids = {p['patternId'] for p in existing_patterns}
+                            for pattern in new_patterns:
+                                if pattern['patternId'] not in existing_ids:
+                                    existing_patterns.append(pattern)
+                            
+                            file_records[handle]['totalPatterns'] = len(existing_patterns)
                             file_records[handle]['estimatedCleanupSize'] = sum(
-                                p['contentLength'] for p in file_records[handle]['patternsFound']
+                                p['contentLength'] for p in existing_patterns
                             )
+                            
+                            # Update cleaned HTML to the latest version
+                            file_records[handle]['cleanedHtml'] = cleaning_result['cleanedHtml']
+                            file_records[handle]['bytesRemoved'] = cleaning_result['bytesRemoved']
             
             # Add file records to main list
             rakuten_records.extend(file_records.values())
@@ -234,12 +327,13 @@ def analyze_csv_files_for_rakuten_content() -> List[Dict[str, Any]]:
     print(f"\n📊 Discovery Summary:")
     print(f"   📄 CSV rows processed: {total_rows:,}")
     print(f"   🎯 Products with EC-UP content: {len(rakuten_records)}")
+    print(f"   🎯 Affected handles: {len(affected_handles)}")
     print(f"   🏷️  Total EC-UP patterns found: {total_patterns}")
     
     # Show pattern type distribution
     pattern_types = {}
     for record in rakuten_records:
-        for pattern in record['patternsFound']:
+        for pattern in record['patternsRemoved']:
             pattern_type = pattern['patternType']
             pattern_types[pattern_type] = pattern_types.get(pattern_type, 0) + 1
     
@@ -247,29 +341,45 @@ def analyze_csv_files_for_rakuten_content() -> List[Dict[str, Any]]:
     for pattern_type, count in sorted(pattern_types.items()):
         print(f"      - {pattern_type}: {count}")
     
-    return rakuten_records
+    return rakuten_records, affected_handles
+
+
+def save_handles_json(affected_handles: Set[str]) -> Path:
+    """Save simple array of affected handles to JSON file"""
+    shared_dir = Path(__file__).parent.parent / "shared"
+    shared_dir.mkdir(exist_ok=True)
+    
+    handles_path = shared_dir / "affected_handles.json"
+    handles_list = sorted(list(affected_handles))
+    
+    with open(handles_path, 'w', encoding='utf-8') as f:
+        json.dump(handles_list, f, indent=2)
+    
+    print(f"📄 Affected handles saved to: {handles_path}")
+    return handles_path
 
 
 def main():
     """Main execution function"""
     print("=" * 70)
-    print("🔍 RAKUTEN EC-UP CONTENT ANALYSIS (JSON OUTPUT)")
+    print("🔍 EC-UP CONTENT ANALYSIS & CLEANING (JSON OUTPUT)")
     print("=" * 70)
     
     try:
         # Phase 1: Analyze CSV files
-        rakuten_records = analyze_csv_files_for_rakuten_content()
+        rakuten_records, affected_handles = analyze_csv_files_for_rakuten_content()
         
         if not rakuten_records:
             print("\n✅ No EC-UP patterns found!")
-            # Save empty JSON file for consistency
+            # Save empty JSON files for consistency
             save_json_report([], "rakuten_content_to_clean.json", "No EC-UP patterns found in CSV data")
+            save_handles_json(set())
             return 0
         
-        # Phase 2: Validate and save JSON
+        # Phase 2: Validate and save detailed JSON
         print(f"\n💾 Saving JSON data for GraphQL processing...")
         
-        required_fields = ['productHandle', 'currentHtml', 'patternsFound', 'totalPatterns']
+        required_fields = ['productHandle', 'cleanedHtml', 'patternsRemoved', 'totalPatterns']
         if not validate_json_structure(rakuten_records, required_fields):
             print("❌ JSON validation failed")
             return 1
@@ -277,8 +387,12 @@ def main():
         json_path = save_json_report(
             rakuten_records,
             "rakuten_content_to_clean.json",
-            f"Products with EC-UP content for cleanup via GraphQL ({len(rakuten_records)} products)"
+            f"Products with cleaned EC-UP content for GraphQL update ({len(rakuten_records)} products)"
         )
+        
+        # Phase 3: Save simple handles array
+        print(f"\n💾 Saving affected handles array...")
+        handles_path = save_handles_json(affected_handles)
         
         # Phase 3: Generate summary list with matched keys
         print(f"\n📋 Generating summary list...")
@@ -288,17 +402,19 @@ def main():
         
         for record in rakuten_records:
             matched_keys = []
-            for pattern in record['patternsFound']:
-                matched_keys.append(pattern['patternName'])
-                all_matched_keys.add(pattern['patternName'])
+            for pattern in record['patternsRemoved']:
+                matched_keys.append(pattern['patternId'])
+                all_matched_keys.add(pattern['patternId'])
             
             summary_list.append({
                 'handle': record['productHandle'],
                 'title': 'Title not available in CSV analysis',  # Title would need to be extracted from CSV
                 'total_patterns': record['totalPatterns'],
                 'cleanup_size': record['estimatedCleanupSize'],
+                'bytes_removed': record['bytesRemoved'],
+                'compression_ratio': record['compressionRatio'],
                 'matched_keys': matched_keys,
-                'pattern_types': list(set(p['patternType'] for p in record['patternsFound']))
+                'pattern_types': list(set(p['patternType'] for p in record['patternsRemoved']))
             })
         
         # Sort by cleanup size (largest first)
@@ -333,9 +449,14 @@ def main():
             print(f"  {key:<25}", end="")
         
         print(f"\n\n🎉 Analysis completed successfully!")
-        print(f"   📄 JSON data saved to: {json_path}")
+        print(f"   📄 Detailed JSON data saved to: {json_path}")
+        print(f"   📄 Affected handles array saved to: {handles_path}")
+        print(f"   🎯 {len(affected_handles)} handles affected")
         print(f"   🚀 Ready for GraphQL processing")
-        print(f"\n💡 Next step: cd node && npm run clean-rakuten")
+        print(f"\n💡 Next steps:")
+        print(f"   1. Review affected handles in: affected_handles.json")
+        print(f"   2. Run Node.js script: cd node && npm run clean-rakuten")
+        print(f"   3. Or use the detailed JSON for custom processing")
         
         return 0
         
