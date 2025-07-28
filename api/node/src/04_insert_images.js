@@ -20,16 +20,24 @@ import { ShopifyGraphQLClient } from './shopify-client.js';
 
 const GET_PRODUCT_QUERY = `
   query getProduct($handle: String!) {
-    productByHandle(handle: $handle) {
+    productByIdentifier(identifier: {handle: $handle}) {
       id
       handle
       title
-      images(first: 250) {
+      media(first: 10) {
         edges {
           node {
             id
-            src
-            altText
+            alt
+          }
+        }
+      }
+      variants(first: 10) {
+        edges {
+          node {
+            id
+            title
+            price
           }
         }
       }
@@ -37,13 +45,16 @@ const GET_PRODUCT_QUERY = `
   }
 `;
 
-const CREATE_PRODUCT_IMAGES_MUTATION = `
-  mutation productCreateImages($id: ID!, $images: [ImageInput!]!) {
-    productCreateImages(id: $id, images: $images) {
-      images {
+const ASSOCIATE_IMAGE_WITH_VARIANT_MUTATION = `
+  mutation associateImageWithVariant($productId: ID!, $variantUpdates: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variantUpdates) {
+      productVariants {
         id
-        src
-        altText
+        title
+        image {
+          id
+          url
+        }
       }
       userErrors {
         field
@@ -88,33 +99,45 @@ class ImageInserter {
       }
 
       console.log(`📂 Loading image data from ${csvFilePath}...`);
+      console.log(`ℹ️  URL transformation will be applied for tsutsu-uraura gold URLs`);
 
       createReadStream(csvFilePath)
         .pipe(csv())
         .on('data', (row) => {
           const handle = row.product_handle?.trim();
+          const variantSku = row.variant_sku?.trim();
           const imageUrl = row.image_url?.trim();
-          const altText = row.alt_text?.trim() || '';
-          const position = parseInt(row.position) || 1;
+          const imageAlt = row.image_alt?.trim() || '';
+          let variantTitleMatch = row.variant_title_match?.trim() || '';
 
-          if (handle && imageUrl) {
+          // Fix numeric conversion issue - ensure integers don't get .0 added
+          if (variantTitleMatch && !isNaN(variantTitleMatch)) {
+            const numValue = parseFloat(variantTitleMatch);
+            if (Number.isInteger(numValue)) {
+              variantTitleMatch = String(Math.floor(numValue));
+            }
+          }
+
+
+          if (handle && variantSku && imageUrl) {
             if (!groupedData[handle]) {
               groupedData[handle] = [];
             }
             
             groupedData[handle].push({
+              variantSku: variantSku,
               src: imageUrl,
-              altText: altText,
-              position: position
+              altText: imageAlt,
+              variantTitleMatch: variantTitleMatch
             });
           }
         })
         .on('end', () => {
           // Convert to array format
-          for (const [handle, images] of Object.entries(groupedData)) {
+          for (const [handle, variants] of Object.entries(groupedData)) {
             imageData.push({
               productHandle: handle,
-              imagesToAdd: images.sort((a, b) => a.position - b.position)
+              variantsToUpdate: variants
             });
           }
 
@@ -130,36 +153,50 @@ class ImageInserter {
   async findProductByHandle(handle) {
     try {
       const result = await this.client.query(GET_PRODUCT_QUERY, { handle });
-      return result.productByHandle;
+      return result.productByIdentifier;
     } catch (error) {
       throw new Error(`Failed to find product ${handle}: ${error.message}`);
     }
   }
 
-  checkForDuplicateImages(existingImages, newImages) {
-    const duplicateImages = [];
-    const uniqueImages = [];
-
-    for (const newImage of newImages) {
-      const isDuplicate = existingImages.some(existing => {
-        // Check for exact URL match or filename match
-        const existingFileName = existing.src.split('/').pop();
-        const newFileName = newImage.src.split('/').pop();
-        
-        return existing.src === newImage.src || existingFileName === newFileName;
-      });
-
-      if (isDuplicate) {
-        duplicateImages.push(newImage);
-      } else {
-        uniqueImages.push(newImage);
-      }
+  findVariantByTitleMatch(variants, titleMatch) {
+    // If no title match (empty string), return first variant
+    if (!titleMatch) {
+      return variants.edges[0]?.node || null;
     }
-
-    return { uniqueImages, duplicateImages };
+    
+    // Normalize the titleMatch for comparison
+    const normalizedTitleMatch = this.normalizeVariantTitle(titleMatch);
+    
+    // Find variant where title matches the titleMatch (with normalization)
+    return variants.edges.find(edge => {
+      const normalizedVariantTitle = this.normalizeVariantTitle(edge.node.title);
+      return normalizedVariantTitle === normalizedTitleMatch;
+    })?.node || null;
   }
 
-  async insertImages(productHandle, imagesToAdd, index, total) {
+  normalizeVariantTitle(title) {
+    if (!title) return '';
+    
+    const titleStr = String(title).trim();
+    
+    // If it's a number, ensure it's normalized (remove .0 from integers)
+    if (!isNaN(titleStr)) {
+      const numValue = parseFloat(titleStr);
+      if (Number.isInteger(numValue)) {
+        return String(Math.floor(numValue));
+      }
+    }
+    
+    return titleStr;
+  }
+
+  findExistingMediaByAlt(media, altText) {
+    // Try to find existing media with matching alt text
+    return media.edges.find(edge => edge.node.alt === altText)?.node || null;
+  }
+
+  async associateVariantImages(productHandle, variantsToUpdate, index, total) {
     try {
       // Find product in Shopify
       const product = await this.findProductByHandle(productHandle);
@@ -173,69 +210,108 @@ class ImageInserter {
         return;
       }
 
-      const existingImages = product.images.edges.map(edge => edge.node);
-      
-      // Check for duplicate images
-      const { uniqueImages, duplicateImages } = this.checkForDuplicateImages(existingImages, imagesToAdd);
+      const variantUpdates = [];
+      let processedCount = 0;
+      let reusedCount = 0;
+      let newUploadsCount = 0;
 
-      if (uniqueImages.length === 0) {
-        console.log(`   ℹ️  [${index}/${total}] All images already exist: ${productHandle}`);
+      for (const variantData of variantsToUpdate) {
+        const { variantSku, src, altText, variantTitleMatch } = variantData;
+        
+        // Find the matching variant
+        const variant = this.findVariantByTitleMatch(product.variants, variantTitleMatch);
+        if (!variant) {
+          const normalizedSearch = this.normalizeVariantTitle(variantTitleMatch);
+          const availableNormalized = product.variants.edges.map(e => 
+            `"${e.node.title}" (normalized: "${this.normalizeVariantTitle(e.node.title)}")`
+          ).join(', ');
+          
+          console.log(`   ⚠️  Variant not found for title match "${variantTitleMatch}" in ${productHandle}`);
+          console.log(`   🔍 Available variants: ${availableNormalized}`);
+          console.log(`   🔍 Looking for normalized: "${normalizedSearch}"`);
+          continue;
+        }
+
+        // Check if existing media with same alt text exists (only if altText is provided)
+        let existingMedia = null;
+        if (altText && altText.trim()) {
+          existingMedia = this.findExistingMediaByAlt(product.media, altText);
+        }
+        
+        if (existingMedia) {
+          // Reuse existing media by matching alt text
+          variantUpdates.push({
+            id: variant.id,
+            mediaId: existingMedia.id
+          });
+          reusedCount++;
+          console.log(`   🔄 Reusing existing media for variant ${variantTitleMatch || '1'}: ${altText}`);
+        } else {
+          // Upload new media using mediaSrc (for products like bos-toilet15 with no matching alt)
+          variantUpdates.push({
+            id: variant.id,
+            mediaSrc: [src]
+          });
+          newUploadsCount++;
+          console.log(`   📤 Will upload new media for variant ${variantTitleMatch || '1'}: ${src}`);
+        }
+        
+        processedCount++;
+      }
+
+      if (variantUpdates.length === 0) {
+        console.log(`   ℹ️  [${index}/${total}] No valid variant updates for: ${productHandle}`);
         this.insertResults.skipped.push({
           handle: productHandle,
           title: product.title,
           shopifyId: product.id,
-          reason: 'All images already exist',
-          duplicateCount: duplicateImages.length
+          reason: 'No valid variant updates found'
         });
         return;
       }
 
-      // Prepare images for insertion (remove position as it's not used in GraphQL)
-      const imagesToInsert = uniqueImages.map(img => ({
-        src: img.src,
-        altText: img.altText || product.title
-      }));
-
-      // Insert images
+      // Execute the mutation
       if (shopifyConfig.dryRun) {
-        console.log(`   🔍 [DRY RUN] Would add ${uniqueImages.length} images to: ${productHandle}`);
+        console.log(`   🔍 [DRY RUN] Would update ${variantUpdates.length} variants in: ${productHandle}`);
         this.insertResults.successful.push({
           handle: productHandle,
           title: product.title,
           status: 'dry_run',
-          imagesAdded: uniqueImages.length,
-          duplicatesSkipped: duplicateImages.length,
-          shopifyId: product.id,
-          addedImages: imagesToInsert
+          variantsUpdated: variantUpdates.length,
+          reusedMedia: reusedCount,
+          newUploads: newUploadsCount,
+          shopifyId: product.id
         });
         return;
       }
 
-      const result = await this.client.mutate(CREATE_PRODUCT_IMAGES_MUTATION, {
-        id: product.id,
-        images: imagesToInsert
+      const result = await this.client.mutate(ASSOCIATE_IMAGE_WITH_VARIANT_MUTATION, {
+        productId: product.id,
+        variantUpdates: variantUpdates
       });
 
-      if (result.productCreateImages.userErrors.length > 0) {
-        const errors = result.productCreateImages.userErrors.map(e => `${e.field}: ${e.message}`);
+      if (result.productVariantsBulkUpdate.userErrors.length > 0) {
+        const errors = result.productVariantsBulkUpdate.userErrors.map(e => `${e.field}: ${e.message}`);
         throw new Error(`Shopify errors: ${errors.join(', ')}`);
       }
 
-      const addedImages = result.productCreateImages.images;
+      const updatedVariants = result.productVariantsBulkUpdate.productVariants;
       
-      console.log(`   ✅ [${index}/${total}] Added ${addedImages.length} images to: ${productHandle}${duplicateImages.length > 0 ? ` (${duplicateImages.length} duplicates skipped)` : ''}`);
+      console.log(`   ✅ [${index}/${total}] Updated ${updatedVariants.length} variants in: ${productHandle} (${reusedCount} reused, ${newUploadsCount} new)`);
       
       this.insertResults.successful.push({
         handle: productHandle,
         title: product.title,
-        status: 'images_added',
-        imagesAdded: addedImages.length,
-        duplicatesSkipped: duplicateImages.length,
+        status: 'variants_updated',
+        variantsUpdated: updatedVariants.length,
+        reusedMedia: reusedCount,
+        newUploads: newUploadsCount,
         shopifyId: product.id,
-        addedImages: addedImages.map(img => ({
-          id: img.id,
-          src: img.src,
-          altText: img.altText
+        updatedVariants: updatedVariants.map(variant => ({
+          id: variant.id,
+          title: variant.title,
+          imageId: variant.image?.id,
+          imageUrl: variant.image?.url
         }))
       });
 
@@ -246,13 +322,13 @@ class ImageInserter {
         handle: productHandle,
         status: 'failed',
         error: error.message,
-        attemptedImages: imagesToAdd.length
+        attemptedVariants: variantsToUpdate.length
       });
     }
   }
 
   async processProducts(imageData) {
-    console.log(`\n🚀 Starting image insertion (${imageData.length} products)...`);
+    console.log(`\n🚀 Starting variant image association (${imageData.length} products)...`);
     
     const batchSize = shopifyConfig.batchSize;
     const total = imageData.length;
@@ -266,7 +342,7 @@ class ImageInserter {
       
       // Process batch with concurrency limit
       const promises = batch.map((productData, batchIndex) => 
-        this.insertImages(productData.productHandle, productData.imagesToAdd, i + batchIndex + 1, total)
+        this.associateVariantImages(productData.productHandle, productData.variantsToUpdate, i + batchIndex + 1, total)
       );
       
       await Promise.all(promises);
@@ -296,13 +372,14 @@ class ImageInserter {
         failed: this.insertResults.failed.length,
         notFound: this.insertResults.notFound.length,
         skipped: this.insertResults.skipped.length,
-        totalImagesAdded: this.insertResults.successful.reduce((sum, result) => 
-          sum + (result.imagesAdded || 0), 0
+        totalVariantsUpdated: this.insertResults.successful.reduce((sum, result) => 
+          sum + (result.variantsUpdated || 0), 0
         ),
-        totalDuplicatesSkipped: this.insertResults.successful.reduce((sum, result) => 
-          sum + (result.duplicatesSkipped || 0), 0
-        ) + this.insertResults.skipped.reduce((sum, result) => 
-          sum + (result.duplicateCount || 0), 0
+        totalMediaReused: this.insertResults.successful.reduce((sum, result) => 
+          sum + (result.reusedMedia || 0), 0
+        ),
+        totalNewUploads: this.insertResults.successful.reduce((sum, result) => 
+          sum + (result.newUploads || 0), 0
         )
       },
       results: this.insertResults,
@@ -320,20 +397,21 @@ class ImageInserter {
   printSummary() {
     const { successful, failed, notFound, skipped } = this.insertResults;
     const total = successful.length + failed.length + notFound.length + skipped.length;
-    const totalImagesAdded = successful.reduce((sum, result) => sum + (result.imagesAdded || 0), 0);
-    const totalDuplicatesSkipped = successful.reduce((sum, result) => sum + (result.duplicatesSkipped || 0), 0) +
-                                  skipped.reduce((sum, result) => sum + (result.duplicateCount || 0), 0);
+    const totalVariantsUpdated = successful.reduce((sum, result) => sum + (result.variantsUpdated || 0), 0);
+    const totalMediaReused = successful.reduce((sum, result) => sum + (result.reusedMedia || 0), 0);
+    const totalNewUploads = successful.reduce((sum, result) => sum + (result.newUploads || 0), 0);
     
     console.log('\n' + '='.repeat(70));
-    console.log('📊 IMAGE INSERTION SUMMARY');
+    console.log('📊 VARIANT IMAGE ASSOCIATION SUMMARY');
     console.log('='.repeat(70));
     console.log(`Total products: ${total}`);
     console.log(`✅ Successfully processed: ${successful.length}`);
     console.log(`❌ Failed: ${failed.length}`);
     console.log(`🔍 Not found: ${notFound.length}`);
-    console.log(`⏭️  Skipped (duplicates): ${skipped.length}`);
-    console.log(`🖼️  Total images added: ${totalImagesAdded}`);
-    console.log(`🔄 Total duplicates skipped: ${totalDuplicatesSkipped}`);
+    console.log(`⏭️  Skipped: ${skipped.length}`);
+    console.log(`🔗 Total variants updated: ${totalVariantsUpdated}`);
+    console.log(`🔄 Media reused (existing): ${totalMediaReused}`);
+    console.log(`📤 New media uploads: ${totalNewUploads}`);
     
     if (total > 0) {
       const successRate = ((successful.length + skipped.length) / total * 100).toFixed(1);
@@ -341,20 +419,20 @@ class ImageInserter {
     }
     
     if (shopifyConfig.dryRun) {
-      console.log('\n🔍 This was a DRY RUN - no actual insertions performed');
-      console.log('💡 Set DRY_RUN=false in .env to perform actual insertion');
+      console.log('\n🔍 This was a DRY RUN - no actual associations performed');
+      console.log('💡 Set DRY_RUN=false in .env to perform actual variant image association');
     }
     
     console.log('\n💡 Next steps:');
-    console.log('   1. Review insert results in reports/04_image_insert_results.json');
-    console.log('   2. Check products with new images in Shopify admin');
-    console.log('   3. Verify image quality and positioning');
+    console.log('   1. Review association results in reports/04_image_insert_results.json');
+    console.log('   2. Check product variants with new images in Shopify admin');
+    console.log('   3. Verify variant-specific image associations');
   }
 }
 
 async function main() {
   console.log('='.repeat(70));
-  console.log('🖼️  IMAGE INSERTION');
+  console.log('🔗 VARIANT IMAGE ASSOCIATION');
   console.log('='.repeat(70));
 
   const inserter = new ImageInserter();
@@ -362,15 +440,23 @@ async function main() {
   try {
     await inserter.initialize();
     
-    // Look for CSV file in reports directory
-    const csvPath = join(pathConfig.reportsPath, 'images_to_insert.csv');
+    // Look for filtered CSV file first, then fallback to original
+    const filteredCsvPath = join(pathConfig.reportsPath, 'images_to_insert_filtered.csv');
+    const originalCsvPath = join(pathConfig.reportsPath, 'images_to_insert.csv');
     
-    if (!existsSync(csvPath)) {
-      console.log(`⚠️ CSV file not found: ${csvPath}`);
+    let csvPath;
+    if (existsSync(filteredCsvPath)) {
+      csvPath = filteredCsvPath;
+      console.log('📂 Using filtered CSV (broken URLs excluded)');
+    } else if (existsSync(originalCsvPath)) {
+      csvPath = originalCsvPath;
+      console.log('⚠️  Using original CSV (may contain broken URLs)');
+    } else {
+      console.log(`⚠️ No CSV file found at ${originalCsvPath}`);
       console.log('\n📝 Expected CSV format:');
-      console.log('product_handle,image_url,alt_text,position');
-      console.log('example-product,https://example.com/image.jpg,Product Image,1');
-      console.log('\n💡 Create the CSV file with images to insert and run again.');
+      console.log('product_handle,variant_sku,image_url,image_alt,variant_title_match');
+      console.log('example-product,example-sku-3s,https://example.com/image.jpg,Product Image,3');
+      console.log('\n💡 Run python api/scripts/04_audit_images.py to generate this CSV file.');
       return;
     }
     
@@ -381,10 +467,10 @@ async function main() {
       return;
     }
 
-    // Confirmation for live insertion
+    // Confirmation for live association
     if (!shopifyConfig.dryRun) {
-      const totalImages = imageData.reduce((sum, product) => sum + product.imagesToAdd.length, 0);
-      console.log(`\n⚠️  LIVE INSERTION MODE - This will add ${totalImages} images to ${imageData.length} products!`);
+      const totalVariants = imageData.reduce((sum, product) => sum + product.variantsToUpdate.length, 0);
+      console.log(`\n⚠️  LIVE ASSOCIATION MODE - This will associate images with ${totalVariants} variants across ${imageData.length} products!`);
       console.log('Press Ctrl+C to cancel or wait 5 seconds to continue...');
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
@@ -393,10 +479,10 @@ async function main() {
     inserter.saveInsertResults();
     inserter.printSummary();
 
-    console.log('\n🎉 Image insertion completed!');
+    console.log('\n🎉 Variant image association completed!');
 
   } catch (error) {
-    console.error(`\n❌ Image insertion failed: ${error.message}`);
+    console.error(`\n❌ Variant image association failed: ${error.message}`);
     console.error(error.stack);
     process.exit(1);
   }
@@ -404,7 +490,7 @@ async function main() {
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n⏹️ Image insertion interrupted by user');
+  console.log('\n⏹️ Variant image association interrupted by user');
   process.exit(0);
 });
 

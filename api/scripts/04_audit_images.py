@@ -13,6 +13,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Set
+import requests
+from urllib.parse import urlparse
 
 import pandas as pd
 from tqdm import tqdm
@@ -114,7 +116,13 @@ class ImageAuditor:
                 image_src = row.get('Image Src', '')
                 variant_image = row.get('Variant Image', '')
                 
-                if (image_src and not pd.isna(image_src)) or (variant_image and not pd.isna(variant_image)):
+                # Check if variant has valid image (not ending with ss.jpg)
+                has_image_src = image_src and not pd.isna(image_src)
+                has_valid_variant_image = (variant_image and not pd.isna(variant_image) and 
+                                         str(variant_image).strip() and 
+                                         not str(variant_image).strip().lower().endswith('ss.jpg'))
+                
+                if has_image_src or has_valid_variant_image:
                     variants[variant_sku]['has_image'] = True
         
         variant_count = len(variants)
@@ -263,8 +271,94 @@ def analyze_csv_files_for_missing_images() -> List[Dict[str, Any]]:
     
     return missing_image_records
 
+def check_url_exists(url: str, timeout: int = 10) -> bool:
+    """
+    Check if a URL exists and is accessible
+    Returns True if URL returns 200 status, False otherwise
+    """
+    if not url or pd.isna(url):
+        return False
+    
+    try:
+        response = requests.head(str(url).strip(), timeout=timeout, allow_redirects=True)
+        return response.status_code == 200
+    except (requests.RequestException, Exception):
+        return False
+
+def transform_image_url(url: str) -> str:
+    """
+    Transform image URL based on domain patterns
+    
+    For URLs like: https://tshop.r10s.jp/tsutsu-uraura/gold/item-image-sp/4970941520836.jpg
+    Transform to: https://tshop.r10s.jp/gold/tsutsu-uraura/item-image-sp/4970941520836.jpg
+    
+    For other URLs (cabinet URLs), return as-is
+    """
+    if not url or pd.isna(url):
+        return url
+    
+    url_str = str(url).strip()
+    
+    # Check if it's a tsutsu-uraura gold URL that needs transformation
+    if 'tshop.r10s.jp/tsutsu-uraura/gold/' in url_str:
+        # Extract the parts after the domain
+        parts = url_str.split('/')
+        if len(parts) >= 6:  # https, '', tshop.r10s.jp, tsutsu-uraura, gold, item-image-sp, filename
+            domain_part = '/'.join(parts[:3])  # https://tshop.r10s.jp
+            shop_name = parts[3]  # tsutsu-uraura
+            folder_name = parts[4]  # gold
+            remaining_path = '/'.join(parts[5:])  # item-image-sp/filename.jpg
+            
+            # Rearrange: domain/folder/shop/remaining
+            transformed_url = f"{domain_part}/{folder_name}/{shop_name}/{remaining_path}"
+            return transformed_url
+    
+    # For cabinet URLs and others, return as-is
+    return url_str
+
+def load_variant_image_lookup() -> Dict[str, str]:
+    """
+    Load variant image lookup from manual/final/output/shopify_products.csv
+    Returns dict mapping Variant SKU -> Variant Image URL
+    """
+    lookup = {}
+    shopify_csv_path = Path(__file__).parent.parent.parent / "manual" / "final" / "output" / "shopify_products.csv"
+    
+    if not shopify_csv_path.exists():
+        print(f"⚠️  Warning: Shopify products CSV not found at {shopify_csv_path}")
+        return lookup
+    
+    print(f"📂 Loading Variant Image lookup from {shopify_csv_path}")
+    
+    try:
+        df = pd.read_csv(shopify_csv_path, encoding='utf-8', low_memory=False)
+        
+        for _, row in df.iterrows():
+            variant_sku = row.get('Variant SKU', '')
+            variant_image = row.get('Variant Image', '')
+            
+            # Only add if both SKU and Image exist and image is valid (not ending with ss.jpg)
+            if (variant_sku and not pd.isna(variant_sku) and 
+                variant_image and not pd.isna(variant_image)):
+                
+                sku_str = str(variant_sku).strip()
+                image_str = str(variant_image).strip()
+                
+                if (sku_str and image_str and 
+                    not image_str.lower().endswith('ss.jpg')):
+                    # Transform the URL if needed
+                    transformed_url = transform_image_url(image_str)
+                    lookup[sku_str] = transformed_url
+        
+        print(f"   ✅ Loaded {len(lookup)} SKU -> Variant Image mappings")
+        
+    except Exception as e:
+        print(f"   ❌ Error loading Shopify products CSV: {e}")
+    
+    return lookup
+
 def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any]]]) -> Path:
-    """Save CSV of rows that have SKU but no Variant Image"""
+    """Save CSV of rows that have SKU but no Variant Image, with enhanced image URLs"""
     reports_dir = Path(__file__).parent.parent / "reports"
     reports_dir.mkdir(exist_ok=True)
     
@@ -272,7 +366,11 @@ def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any
     
     print(f"\n💾 Saving rows with SKU but no Variant Image to {csv_path}")
     
+    # Load the variant image lookup from shopify_products.csv
+    variant_image_lookup = load_variant_image_lookup()
+    
     matching_rows = []
+    enhanced_count = 0
     
     # Process all products to find rows with SKU but no Variant Image
     for handle, product_rows in grouped_products.items():
@@ -282,12 +380,26 @@ def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any
             
             # Check if has SKU but no Variant Image
             has_sku = variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip()
-            has_variant_image = variant_image and not pd.isna(variant_image) and str(variant_image).strip()
+            # Check if variant image exists and is valid (not ending with ss.jpg)
+            has_variant_image = (variant_image and not pd.isna(variant_image) and 
+                               str(variant_image).strip() and 
+                               not str(variant_image).strip().lower().endswith('ss.jpg'))
             
             if has_sku and not has_variant_image:
-                matching_rows.append(row)
+                # Create a copy of the row to modify
+                enhanced_row = row.copy()
+                sku_str = str(variant_sku).strip()
+                
+                # Try to find the variant image URL from the lookup
+                if sku_str in variant_image_lookup:
+                    enhanced_row['Variant Image'] = variant_image_lookup[sku_str]
+                    enhanced_count += 1
+                    print(f"   🔗 Enhanced {sku_str} with URL: {variant_image_lookup[sku_str]}")
+                
+                matching_rows.append(enhanced_row)
     
     print(f"   📊 Found {len(matching_rows)} rows with SKU but no Variant Image")
+    print(f"   ✨ Enhanced {enhanced_count} rows with missing Variant Image URLs")
     
     if matching_rows:
         # Get all column names from the first row
@@ -305,6 +417,225 @@ def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any
             writer = csv.writer(f)
             writer.writerow(['message'])
             writer.writerow(['No rows found with SKU but missing Variant Image'])
+    
+    return csv_path
+
+def check_images_to_insert_urls() -> tuple[Path, list]:
+    """
+    Check URLs from images_to_insert.csv for accessibility
+    Returns (report_path, broken_urls_list)
+    """
+    reports_dir = Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    images_csv_path = reports_dir / "images_to_insert.csv"
+    invalid_urls_path = reports_dir / "04_invalid_image_urls.csv"
+    
+    if not images_csv_path.exists():
+        print(f"⚠️  images_to_insert.csv not found at {images_csv_path}")
+        return invalid_urls_path, []
+    
+    print(f"\n🔍 Checking URLs from images_to_insert.csv for accessibility...")
+    
+    broken_urls = []
+    checked_urls = set()  # Avoid checking same URL multiple times
+    
+    # Read images_to_insert.csv and check each URL
+    try:
+        df = pd.read_csv(images_csv_path, encoding='utf-8')
+        
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Checking URLs"):
+            url = row.get('image_url', '')
+            handle = row.get('product_handle', '')
+            variant_sku = row.get('variant_sku', '')
+            
+            if url and not pd.isna(url):
+                url = str(url).strip()
+                if url and url not in checked_urls:
+                    checked_urls.add(url)
+                    if not check_url_exists(url):
+                        broken_urls.append({
+                            'product_handle': handle,
+                            'variant_sku': variant_sku,
+                            'image_url': url,
+                            'status': 'inaccessible'
+                        })
+        
+        print(f"   📊 Found {len(broken_urls)} broken URLs out of {len(checked_urls)} checked")
+        
+        # Save results
+        if broken_urls:
+            with open(invalid_urls_path, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['product_handle', 'variant_sku', 'image_url', 'status']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for record in broken_urls:
+                    writer.writerow(record)
+            
+            print(f"   ✅ Saved broken URL report to {invalid_urls_path}")
+        else:
+            # Create empty file with message
+            with open(invalid_urls_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['message'])
+                writer.writerow(['All URLs from images_to_insert.csv are accessible'])
+            
+            print(f"   ✅ All URLs are accessible - created empty report")
+        
+    except Exception as e:
+        print(f"   ❌ Error checking URLs: {e}")
+    
+    return invalid_urls_path, broken_urls
+
+def generate_filtered_images_to_insert(broken_urls: list) -> Path:
+    """
+    Generate a filtered images_to_insert.csv excluding broken URLs
+    """
+    reports_dir = Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    original_csv_path = reports_dir / "images_to_insert.csv"
+    filtered_csv_path = reports_dir / "images_to_insert_filtered.csv"
+    
+    if not original_csv_path.exists():
+        print(f"⚠️  Original images_to_insert.csv not found")
+        return filtered_csv_path
+    
+    # Create set of broken URLs for fast lookup
+    broken_url_set = {item['image_url'] for item in broken_urls}
+    
+    try:
+        df = pd.read_csv(original_csv_path, encoding='utf-8')
+        
+        # Filter out rows with broken URLs
+        filtered_df = df[~df['image_url'].isin(broken_url_set)]
+        
+        # Save filtered CSV
+        filtered_df.to_csv(filtered_csv_path, index=False, encoding='utf-8')
+        
+        original_count = len(df)
+        filtered_count = len(filtered_df)
+        removed_count = original_count - filtered_count
+        
+        print(f"   📄 Generated filtered CSV: {filtered_csv_path}")
+        print(f"   📊 Original: {original_count} rows → Filtered: {filtered_count} rows ({removed_count} broken URLs removed)")
+        
+    except Exception as e:
+        print(f"   ❌ Error generating filtered CSV: {e}")
+    
+    return filtered_csv_path
+
+def extract_variant_suffix(sku: str) -> str:
+    """
+    Extract variant suffix from SKU (e.g., 'product-3s' -> '3', 'product-2.0s' -> '2')
+    If no suffix, returns empty string (represents first variant)
+    """
+    if not sku:
+        return ""
+    
+    sku_str = str(sku).strip()
+    if sku_str.endswith('s') and '-' in sku_str:
+        # Extract the part between last '-' and 's'
+        parts = sku_str.rsplit('-', 1)
+        if len(parts) == 2:
+            suffix = parts[1]
+            if suffix.endswith('s') and len(suffix) > 1:
+                variant_part = suffix[:-1]  # Remove the 's'
+                
+                # Handle decimal cases: "2.0" -> "2"
+                if '.' in variant_part and variant_part.replace('.', '').isdigit():
+                    # Convert to float then int to remove .0
+                    try:
+                        float_val = float(variant_part)
+                        if float_val == int(float_val):
+                            return str(int(float_val))
+                    except ValueError:
+                        pass
+                
+                return variant_part
+    
+    return ""  # No suffix means first variant
+
+def save_images_to_insert_csv(grouped_products: Dict[str, List[Dict[str, Any]]]) -> Path:
+    """
+    Generate CSV file for variant image insertion with format: 
+    product_handle,variant_sku,image_url,image_alt,variant_title_match
+    This file is used by 04_insert_images.js
+    """
+    reports_dir = Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    csv_path = reports_dir / "images_to_insert.csv"
+    
+    print(f"\n💾 Generating images_to_insert.csv for Node.js script")
+    
+    # Load the variant image lookup from shopify_products.csv
+    variant_image_lookup = load_variant_image_lookup()
+    
+    insert_records = []
+    
+    # Process all products to find rows with SKU but no Variant Image
+    for handle, product_rows in grouped_products.items():
+        for row in product_rows:
+            variant_sku = row.get('Variant SKU', '')
+            variant_image = row.get('Variant Image', '')
+            product_title = row.get('Title', '')
+            image_alt = row.get('Image Alt Text', '')
+            
+            # Check if has SKU but no Variant Image
+            has_sku = variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip()
+            # Check if variant image exists and is valid (not ending with ss.jpg)
+            has_variant_image = (variant_image and not pd.isna(variant_image) and 
+                               str(variant_image).strip() and 
+                               not str(variant_image).strip().lower().endswith('ss.jpg'))
+            
+            if has_sku and not has_variant_image:
+                sku_str = str(variant_sku).strip()
+                
+                # Try to find the variant image URL from the lookup
+                if sku_str in variant_image_lookup:
+                    image_url = variant_image_lookup[sku_str]
+                    
+                    # Extract variant title for matching (e.g., '3' from 'product-3s')
+                    variant_title_match = extract_variant_suffix(sku_str)
+                    
+                    # Generate appropriate alt text
+                    if image_alt and not pd.isna(image_alt):
+                        alt_text = str(image_alt).strip()
+                    elif product_title and not pd.isna(product_title):
+                        alt_text = f"{product_title} - {sku_str}"
+                    else:
+                        alt_text = sku_str
+                    
+                    insert_records.append({
+                        'product_handle': handle,
+                        'variant_sku': sku_str,
+                        'image_url': image_url,
+                        'image_alt': alt_text,
+                        'variant_title_match': str(variant_title_match)  # Ensure it's stored as string
+                    })
+    
+    print(f"   📊 Found {len(insert_records)} images to insert")
+    
+    if insert_records:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ['product_handle', 'variant_sku', 'image_url', 'image_alt', 'variant_title_match']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for record in insert_records:
+                writer.writerow(record)
+        
+        print(f"   ✅ Saved {len(insert_records)} image insertion records to {csv_path}")
+    else:
+        # Create empty file with header
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ['product_handle', 'variant_sku', 'image_url', 'image_alt', 'variant_title_match']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+        
+        print(f"   ℹ️  No images to insert - created empty CSV file")
     
     return csv_path
 
@@ -389,6 +720,15 @@ def main():
         
         # Phase 2: Save rows with SKU but no Variant Image
         sku_csv_path = save_sku_no_variant_image_csv(grouped_products)
+        
+        # Phase 2.5: Generate images_to_insert.csv for Node.js script
+        insert_csv_path = save_images_to_insert_csv(grouped_products)
+        
+        # Phase 2.6: Check URL accessibility and generate filtered CSV
+        invalid_urls_path, broken_urls = check_images_to_insert_urls()
+        
+        # Phase 2.7: Generate filtered CSV excluding broken URLs
+        filtered_csv_path = generate_filtered_images_to_insert(broken_urls)
         
         # Phase 3: Analyze CSV files for missing images
         print("🔍 Analyzing CSV files for missing images...")
@@ -497,14 +837,18 @@ def main():
         
         print(f"\n🎉 Analysis completed successfully!")
         print(f"   📄 SKU without Variant Image CSV: {sku_csv_path}")
+        print(f"   📄 Images to Insert CSV: {insert_csv_path}")
+        print(f"   📄 Broken URLs Report: {invalid_urls_path}")
+        print(f"   📄 Filtered Images CSV: {filtered_csv_path}")
         if not missing_image_records:
             print(f"   📄 Missing images CSV: (empty - no issues found)")
         else:
             print(f"   📄 Missing images CSV: {csv_path}")
         print(f"\n💡 Next steps:")
         print(f"   1. Check {sku_csv_path.name} for rows with SKU but no Variant Image")
-        print(f"   2. Search for and attach appropriate images")
-        print(f"   3. Use Node.js GraphQL to upload images to Shopify")
+        print(f"   2. Review {invalid_urls_path.name} for any broken image URLs")
+        print(f"   3. Use {filtered_csv_path.name} (excludes broken URLs) for image insertion")
+        print(f"   4. Run 'node api/node/src/04_insert_images.js' to associate images with variants")
         
         return 0
         
