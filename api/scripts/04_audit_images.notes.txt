@@ -1,0 +1,81 @@
+special treatment for Will upload new media for variant 3: https://tshop.r10s.jp/tsutsu-uraura/cabinet/09079214/4560224500206-03i.jpg
+
+mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+  productCreateMedia(productId: $productId, media: $media) {
+    media {
+      id # <-- This is the new ID you need for Step 2
+      mediaContentType
+      status
+      image {
+        id
+        url
+        altText
+        # originalSource is not a field you can query back, but the URL will be the Shopify CDN URL
+      }
+    }
+    mediaUserErrors {
+      field
+      message
+      code
+    }
+  }
+}
+
+{
+  "productId": "gid://shopify/Product/10111128174908",
+  "media": [
+    {
+      "originalSource": "https://tshop.r10s.jp/tsutsu-uraura/cabinet/09079214/4560224500206-03i.jpg",
+      "alt": "test",
+      "mediaContentType": "IMAGE"
+    }
+    // You can add more images here if needed
+  ]
+}
+
+{
+  "data": {
+    "productCreateMedia": {
+      "media": [
+        {
+          "id": "gid://shopify/ProductImage/9876543210987", // <<-- CAPTURE THIS ID!
+          "mediaContentType": "IMAGE",
+          "status": "UPLOADED",
+          "image": {
+            "id": "gid://shopify/ProductImage/9876543210987",
+            "url": "https://cdn.shopify.com/s/files/1/.../...",
+            "altText": "test"
+          }
+        }
+      ],
+      "mediaUserErrors": []
+    }
+  }
+}
+
+mutation productVariantBulkUpdate($variantUpdates: [ProductVariantInput!]!) {
+  productVariantBulkUpdate(variants: $variantUpdates) {
+    productVariants {
+      id
+      image {
+        id
+        url
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+
+{
+  "variantUpdates": [
+    {
+      "id": "gid://shopify/ProductVariant/51955714261308",
+      "image": {
+        "id": "gid://shopify/ProductImage/9876543210987" // <-- Use the ID from Step 1
+      }
+    }
+  ]
+}

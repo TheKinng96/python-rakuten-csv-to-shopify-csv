@@ -82,7 +82,7 @@ class ImageInserter {
       throw new Error('Configuration validation failed');
     }
 
-    this.client = new ShopifyGraphQLClient(true); // Use test store
+    this.client = new ShopifyGraphQLClient(false); // Use test store
     
     await this.client.testConnection();
     console.log('✅ Connected to Shopify test store');

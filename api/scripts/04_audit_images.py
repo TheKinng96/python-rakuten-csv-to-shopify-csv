@@ -526,6 +526,7 @@ def generate_filtered_images_to_insert(broken_urls: list) -> Path:
     
     return filtered_csv_path
 
+
 def extract_variant_suffix(sku: str) -> str:
     """
     Extract variant suffix from SKU (e.g., 'product-3s' -> '3', 'product-2.0s' -> '2')
@@ -730,6 +731,7 @@ def main():
         # Phase 2.7: Generate filtered CSV excluding broken URLs
         filtered_csv_path = generate_filtered_images_to_insert(broken_urls)
         
+        
         # Phase 3: Analyze CSV files for missing images
         print("🔍 Analyzing CSV files for missing images...")
         
@@ -849,6 +851,7 @@ def main():
         print(f"   2. Review {invalid_urls_path.name} for any broken image URLs")
         print(f"   3. Use {filtered_csv_path.name} (excludes broken URLs) for image insertion")
         print(f"   4. Run 'node api/node/src/04_insert_images.js' to associate images with variants")
+        print(f"   5. Run 'python api/scripts/01_analyze_shopify_products.py' to find -XXss.jpg patterns")
         
         return 0
         
