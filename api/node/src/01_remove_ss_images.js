@@ -14,18 +14,21 @@ import { join } from 'path';
 import { shopifyConfig, pathConfig, validateConfig } from './config.js';
 import { ShopifyGraphQLClient } from './shopify-client.js';
 
-const GET_PRODUCT_IMAGES_QUERY = `
-  query getProductImages($handle: String!) {
-    productByHandle(handle: $handle) {
+const GET_PRODUCT_MEDIA_QUERY = `
+  query getProduct($handle: String!) {
+    productByIdentifier(identifier: {handle: $handle}) {
       id
       handle
       title
-      images(first: 250) {
+      media(first: 250) {
         edges {
           node {
             id
-            src
-            altText
+            alt
+            ... on MediaImage {
+              id
+              alt
+            }
           }
         }
       }
@@ -33,17 +36,7 @@ const GET_PRODUCT_IMAGES_QUERY = `
   }
 `;
 
-const DELETE_PRODUCT_IMAGES_MUTATION = `
-  mutation productDeleteImages($id: ID!, $imageIds: [ID!]!) {
-    productDeleteImages(id: $id, imageIds: $imageIds) {
-      deletedImageIds
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
+// Removed DELETE_FILES_MUTATION - now only collecting data
 
 class SSImageRemover {
   constructor() {
@@ -53,6 +46,8 @@ class SSImageRemover {
       failed: [],
       notFound: []
     };
+    this.matchedImages = []; // Store matched images with details
+    this.imageGids = []; // Store just the GIDs
   }
 
   async initialize() {
@@ -68,57 +63,71 @@ class SSImageRemover {
     console.log('✅ Connected to Shopify test store');
   }
 
-  loadSSImagesFromJSON() {
-    const jsonPath = join(pathConfig.sharedPath, 'ss_images_to_remove.json');
+  loadSSImagesFromCSV() {
+    const csvPath = join(pathConfig.reportsPath, 'ss_images_for_removal.csv');
     
-    if (!existsSync(jsonPath)) {
-      throw new Error(`SS images JSON file not found: ${jsonPath}`);
+    if (!existsSync(csvPath)) {
+      throw new Error(`SS images CSV file not found: ${csvPath}`);
     }
 
-    console.log(`📂 Loading SS images data from ${jsonPath}...`);
+    console.log(`📂 Loading SS images data from ${csvPath}...`);
     
-    const jsonData = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    const csvContent = readFileSync(csvPath, 'utf-8');
+    const lines = csvContent.trim().split('\n');
+    const headers = lines[0].split(',');
     
-    if (!jsonData.data || !Array.isArray(jsonData.data)) {
-      throw new Error('Invalid JSON structure: expected data array');
+    const ssImages = [];
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',');
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header.trim()] = values[index] ? values[index].trim() : '';
+      });
+      ssImages.push(row);
     }
 
-    console.log(`✅ Loaded ${jsonData.data.length} products with SS images from JSON`);
-    return jsonData.data;
+    console.log(`✅ Loaded ${ssImages.length} SS images from CSV`);
+    return ssImages;
   }
 
   async findProductByHandle(handle) {
     try {
-      const result = await this.client.query(GET_PRODUCT_IMAGES_QUERY, { handle });
-      return result.productByHandle;
+      const result = await this.client.query(GET_PRODUCT_MEDIA_QUERY, { handle });
+      
+      if (!result || !result.productByIdentifier) {
+        console.log(`   ⚠️  Product not found in Shopify: ${handle}`);
+        return null;
+      }
+      
+      return result.productByIdentifier;
     } catch (error) {
       throw new Error(`Failed to find product ${handle}: ${error.message}`);
     }
   }
 
-  matchSSImages(shopifyImages, ssImagesToRemove) {
+  matchSSImagesByAlt(shopifyMedia, ssImageAltText) {
     const matchedImages = [];
     
-    for (const ssImage of ssImagesToRemove) {
-      const ssImageUrl = ssImage.imageUrl;
-      
-      // Find matching Shopify image by URL
-      const shopifyImage = shopifyImages.find(img => {
-        // Extract filename from URLs for comparison
-        const ssFileName = ssImageUrl.split('/').pop();
-        const shopifyFileName = img.src.split('/').pop();
-        
-        // Direct URL match or filename match
-        return img.src === ssImageUrl || shopifyFileName === ssFileName;
-      });
-      
-      if (shopifyImage) {
+    if (!shopifyMedia || !Array.isArray(shopifyMedia)) {
+      console.log(`   ⚠️  Invalid shopifyMedia provided to matchSSImagesByAlt`);
+      return matchedImages;
+    }
+    
+    // Find matching Shopify media by alt text
+    const matchingMedia = shopifyMedia.filter(media => {
+      if (!media || !media.alt) {
+        return false;
+      }
+      return media.alt.trim() === ssImageAltText.trim();
+    });
+    
+    for (const media of matchingMedia) {
+      if (media && media.id) {
         matchedImages.push({
-          shopifyImageId: shopifyImage.id,
-          shopifyImageSrc: shopifyImage.src,
-          ssImagePattern: ssImage.ssPattern,
-          ssImageUrl: ssImageUrl,
-          reason: ssImage.reason
+          shopifyImageId: media.id,
+          shopifyImageAlt: media.alt,
+          ssImageAltText: ssImageAltText,
+          reason: 'SS image matched by alt text'
         });
       }
     }
@@ -140,19 +149,47 @@ class SSImageRemover {
         return;
       }
 
-      const shopifyImages = product.images.edges.map(edge => edge.node);
+      // Check if product has media
+      if (!product.media || !product.media.edges) {
+        console.log(`   ⚠️  [${index}/${total}] Product has no media: ${productHandle}`);
+        this.removalResults.successful.push({
+          handle: productHandle,
+          title: product.title,
+          status: 'no_media_found',
+          imagesRemoved: 0,
+          shopifyId: product.id
+        });
+        return;
+      }
+
+      const shopifyMedia = product.media.edges.map(edge => edge.node).filter(node => node != null);
+      console.log(`   📊 [${index}/${total}] Found ${shopifyMedia.length} media items for: ${productHandle}`);
       
-      // Find matching SS images to remove
-      const ssImagesData = this.loadSSImagesFromJSON().find(item => 
-        item.productHandle === productHandle
+      // Find SS images for this product handle
+      const ssImagesData = this.ssImagesCSV.filter(row => 
+        row.Handle === productHandle
       );
       
-      if (!ssImagesData) {
+      if (ssImagesData.length === 0) {
         console.log(`   ⚠️  [${index}/${total}] No SS images data for: ${productHandle}`);
         return;
       }
 
-      const matchedImages = this.matchSSImages(shopifyImages, ssImagesData.imagesToRemove);
+      console.log(`   🔍 [${index}/${total}] Looking for ${ssImagesData.length} SS images with alt text`);
+
+      // Match SS images by alt text
+      const matchedImages = [];
+      for (const ssImage of ssImagesData) {
+        const altText = ssImage['Image Alt Text'];
+        if (altText && altText.trim()) {
+          console.log(`   🔍 [${index}/${total}] Searching for alt text: "${altText}"`);
+          const matches = this.matchSSImagesByAlt(shopifyMedia, altText.trim());
+          if (matches.length > 0) {
+            console.log(`   ✅ [${index}/${total}] Found ${matches.length} matches for alt text: "${altText}"`);
+          }
+          matchedImages.push(...matches);
+        }
+      }
       
       if (matchedImages.length === 0) {
         console.log(`   ⚠️  [${index}/${total}] No SS images found to remove: ${productHandle}`);
@@ -166,46 +203,42 @@ class SSImageRemover {
         return;
       }
 
-      // Remove matched SS images
-      if (shopifyConfig.dryRun) {
-        console.log(`   🔍 [DRY RUN] Would remove ${matchedImages.length} SS images from: ${productHandle}`);
+      // Store matched images for file output
+      if (matchedImages.length > 0) {
+        console.log(`   ✅ [${index}/${total}] Found ${matchedImages.length} matching SS images for: ${productHandle}`);
+        
+        // Store matched images with full details
+        for (const match of matchedImages) {
+          this.matchedImages.push({
+            gid: match.shopifyImageId,
+            handle: productHandle,
+            imageAlt: match.shopifyImageAlt
+          });
+          
+          // Store just the GID
+          this.imageGids.push(match.shopifyImageId);
+        }
+        
+        console.log(`   📝 [${index}/${total}] Added ${matchedImages.length} images to collection`);
+        
         this.removalResults.successful.push({
           handle: productHandle,
           title: product.title,
-          status: 'dry_run',
+          status: 'images_found',
           imagesRemoved: matchedImages.length,
           shopifyId: product.id,
-          removedImages: matchedImages
+          matchedImages: matchedImages
         });
-        return;
+      } else {
+        console.log(`   ⚠️  [${index}/${total}] No matching SS images found for: ${productHandle}`);
+        this.removalResults.successful.push({
+          handle: productHandle,
+          title: product.title,
+          status: 'no_matches',
+          imagesRemoved: 0,
+          shopifyId: product.id
+        });
       }
-
-      const imageIdsToRemove = matchedImages.map(img => img.shopifyImageId);
-      
-      const result = await this.client.mutate(DELETE_PRODUCT_IMAGES_MUTATION, {
-        id: product.id,
-        imageIds: imageIdsToRemove
-      });
-
-      if (result.productDeleteImages.userErrors.length > 0) {
-        const errors = result.productDeleteImages.userErrors.map(e => `${e.field}: ${e.message}`);
-        throw new Error(`Shopify errors: ${errors.join(', ')}`);
-      }
-
-      const deletedImageIds = result.productDeleteImages.deletedImageIds;
-      
-      console.log(`   ✅ [${index}/${total}] Removed ${deletedImageIds.length} SS images from: ${productHandle}`);
-      
-      this.removalResults.successful.push({
-        handle: productHandle,
-        title: product.title,
-        status: 'images_removed',
-        imagesRemoved: deletedImageIds.length,
-        shopifyId: product.id,
-        removedImages: matchedImages.filter(img => 
-          deletedImageIds.includes(img.shopifyImageId)
-        )
-      });
 
     } catch (error) {
       console.error(`   ❌ [${index}/${total}] Failed: ${productHandle} - ${error.message}`);
@@ -218,22 +251,22 @@ class SSImageRemover {
     }
   }
 
-  async processProducts(ssImageData) {
-    console.log(`\n🚀 Starting SS image removal (${ssImageData.length} products)...`);
+  async processProducts(uniqueHandles) {
+    console.log(`\n🚀 Starting SS image removal (${uniqueHandles.length} products)...`);
     
     const batchSize = shopifyConfig.batchSize;
-    const total = ssImageData.length;
+    const total = uniqueHandles.length;
     let processed = 0;
 
     // Process in batches to respect rate limits
-    for (let i = 0; i < ssImageData.length; i += batchSize) {
-      const batch = ssImageData.slice(i, i + batchSize);
+    for (let i = 0; i < uniqueHandles.length; i += batchSize) {
+      const batch = uniqueHandles.slice(i, i + batchSize);
       
-      console.log(`\n📦 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(ssImageData.length/batchSize)}`);
+      console.log(`\n📦 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(uniqueHandles.length/batchSize)}`);
       
       // Process batch with concurrency limit
-      const promises = batch.map((productData, batchIndex) => 
-        this.removeSSImages(productData.productHandle, i + batchIndex + 1, total)
+      const promises = batch.map((handle, batchIndex) => 
+        this.removeSSImages(handle, i + batchIndex + 1, total)
       );
       
       await Promise.all(promises);
@@ -244,7 +277,7 @@ class SSImageRemover {
       console.log(`📈 Progress: ${processed}/${total} processed (${successRate}% success rate)`);
       
       // Rate limiting delay between batches
-      if (i + batchSize < ssImageData.length) {
+      if (i + batchSize < uniqueHandles.length) {
         const delay = Math.ceil(1000 / shopifyConfig.maxRequestsPerSecond * batchSize);
         console.log(`⏱️  Waiting ${delay}ms for rate limiting...`);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -262,7 +295,7 @@ class SSImageRemover {
         successful: this.removalResults.successful.length,
         failed: this.removalResults.failed.length,
         notFound: this.removalResults.notFound.length,
-        totalImagesRemoved: this.removalResults.successful.reduce((sum, result) => 
+        totalImagesFound: this.removalResults.successful.reduce((sum, result) => 
           sum + (result.imagesRemoved || 0), 0
         )
       },
@@ -276,42 +309,99 @@ class SSImageRemover {
 
     writeFileSync(resultsPath, JSON.stringify(report, null, 2));
     console.log(`📄 Removal results saved to: ${resultsPath}`);
+    
+    // Save matched images to files
+    this.saveMatchedImagesToFiles();
+  }
+
+  saveMatchedImagesToFiles() {
+    if (this.matchedImages.length === 0) {
+      console.log('⚠️  No matched images to save');
+      return;
+    }
+
+    // Save file with just GIDs (one per line)
+    const gidsPath = join(pathConfig.reportsPath, '01_ss_image_gids.txt');
+    const gidsContent = this.imageGids.join('\n');
+    writeFileSync(gidsPath, gidsContent);
+    console.log(`📄 Image GIDs saved to: 01_ss_image_gids.txt (${this.imageGids.length} items)`);
+
+    // Save file with full image details (CSV format)
+    const detailsPath = join(pathConfig.reportsPath, '01_ss_image_details.csv');
+    const csvHeader = 'gid,handle,imageAlt\n';
+    const csvRows = this.matchedImages.map(img => 
+      `${img.gid},"${img.handle}","${img.imageAlt}"`
+    ).join('\n');
+    const csvContent = csvHeader + csvRows;
+    writeFileSync(detailsPath, csvContent);
+    console.log(`📄 Image details saved to: 01_ss_image_details.csv (${this.matchedImages.length} items)`);
+
+    // Save summary
+    const summaryData = {
+      timestamp: new Date().toISOString(),
+      totalImages: this.matchedImages.length,
+      uniqueHandles: [...new Set(this.matchedImages.map(img => img.handle))].length,
+      files: {
+        gidsOnly: '01_ss_image_gids.txt',
+        fullDetails: '01_ss_image_details.csv'
+      },
+      instructions: {
+        gidsFile: "Contains only the image GIDs, one per line",
+        detailsFile: "Contains GID, handle, and image alt text in CSV format"
+      }
+    };
+
+    const summaryPath = join(pathConfig.reportsPath, '01_ss_matched_images_summary.json');
+    writeFileSync(summaryPath, JSON.stringify(summaryData, null, 2));
+    console.log(`📄 Summary saved to: 01_ss_matched_images_summary.json`);
   }
 
   printSummary() {
     const { successful, failed, notFound } = this.removalResults;
     const total = successful.length + failed.length + notFound.length;
-    const totalImagesRemoved = successful.reduce((sum, result) => sum + (result.imagesRemoved || 0), 0);
+    const totalImagesFound = successful.reduce((sum, result) => sum + (result.imagesRemoved || 0), 0);
     
     console.log('\n' + '='.repeat(70));
-    console.log('📊 SS IMAGE REMOVAL SUMMARY');
+    console.log('📊 SS IMAGE MATCHING SUMMARY');
     console.log('='.repeat(70));
-    console.log(`Total products: ${total}`);
+    console.log(`Total products processed: ${total}`);
     console.log(`✅ Successful: ${successful.length}`);
     console.log(`❌ Failed: ${failed.length}`);
     console.log(`🔍 Not found: ${notFound.length}`);
-    console.log(`🖼️  Total images removed: ${totalImagesRemoved}`);
+    console.log(`🖼️  Total matching images found: ${totalImagesFound}`);
+    console.log(`🗂️  Unique images collected: ${this.matchedImages.length}`);
     
     if (total > 0) {
       const successRate = (successful.length / total * 100).toFixed(1);
       console.log(`📈 Success rate: ${successRate}%`);
     }
     
-    if (shopifyConfig.dryRun) {
-      console.log('\n🔍 This was a DRY RUN - no actual removals performed');
-      console.log('💡 Set DRY_RUN=false in .env to perform actual removal');
+    if (this.matchedImages.length > 0) {
+      const uniqueHandles = [...new Set(this.matchedImages.map(img => img.handle))].length;
+      
+      console.log('\n' + '='.repeat(70));
+      console.log('🗂️  OUTPUT FILES CREATED');
+      console.log('='.repeat(70));
+      console.log(`📁 Check the reports folder for these files:`);
+      console.log(`   📄 01_ss_image_gids.txt (${this.imageGids.length} GIDs)`);
+      console.log(`   📄 01_ss_image_details.csv (${this.matchedImages.length} rows)`);
+      console.log(`   📄 01_ss_matched_images_summary.json`);
+      console.log(`   📄 01_ss_removal_results.json`);
+      console.log(`\n📊 Data summary:`);
+      console.log(`   🎯 Matched images: ${this.matchedImages.length}`);
+      console.log(`   🏪 Unique products: ${uniqueHandles}`);
     }
     
-    console.log('\n💡 Next steps:');
-    console.log('   1. Review removal results in reports/01_ss_removal_results.json');
-    console.log('   2. Check affected products in Shopify admin');
-    console.log('   3. Continue with other processing scripts if needed');
+    console.log('\n💡 Files created:');
+    console.log('   📄 01_ss_image_gids.txt - Just the image GIDs (one per line)');
+    console.log('   📄 01_ss_image_details.csv - Full details (GID, handle, image alt)');
+    console.log('   📄 01_ss_matched_images_summary.json - Summary information');
   }
 }
 
 async function main() {
   console.log('='.repeat(70));
-  console.log('🖼️  SS IMAGES REMOVAL');
+  console.log('🖼️  SS IMAGES MATCHING');
   console.log('='.repeat(70));
 
   const remover = new SSImageRemover();
@@ -319,28 +409,26 @@ async function main() {
   try {
     await remover.initialize();
     
-    const ssImageData = remover.loadSSImagesFromJSON();
+    const ssImageData = remover.loadSSImagesFromCSV();
+    remover.ssImagesCSV = ssImageData; // Store for use in removeSSImages method
     
     if (ssImageData.length === 0) {
-      console.log('⚠️ No products with SS images to process');
+      console.log('⚠️ No SS images to process');
       return;
     }
 
-    // Confirmation for live removal
-    if (!shopifyConfig.dryRun) {
-      console.log(`\n⚠️  LIVE REMOVAL MODE - This will remove SS images from ${ssImageData.length} products!`);
-      console.log('Press Ctrl+C to cancel or wait 5 seconds to continue...');
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
+    // Get unique handles
+    const uniqueHandles = [...new Set(ssImageData.map(row => row.Handle))];
+    console.log(`📊 Found ${ssImageData.length} SS images across ${uniqueHandles.length} products`);
 
-    await remover.processProducts(ssImageData);
+    await remover.processProducts(uniqueHandles);
     remover.saveRemovalResults();
     remover.printSummary();
 
-    console.log('\n🎉 SS image removal completed!');
+    console.log('\n🎉 SS image matching completed!');
 
   } catch (error) {
-    console.error(`\n❌ SS image removal failed: ${error.message}`);
+    console.error(`\n❌ SS image matching failed: ${error.message}`);
     console.error(error.stack);
     process.exit(1);
   }
@@ -348,7 +436,7 @@ async function main() {
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n⏹️ SS image removal interrupted by user');
+  console.log('\n⏹️ SS image matching interrupted by user');
   process.exit(0);
 });
 

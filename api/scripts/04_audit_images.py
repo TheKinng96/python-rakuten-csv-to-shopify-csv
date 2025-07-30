@@ -119,8 +119,10 @@ class ImageAuditor:
                 # Check if variant has valid image (not ending with ss.jpg)
                 has_image_src = image_src and not pd.isna(image_src)
                 has_valid_variant_image = (variant_image and not pd.isna(variant_image) and 
-                                         str(variant_image).strip() and 
-                                         not str(variant_image).strip().lower().endswith('ss.jpg'))
+                                         str(variant_image).strip())
+                # has_valid_variant_image = (variant_image and not pd.isna(variant_image) and 
+                #                          str(variant_image).strip() and 
+                #                          not str(variant_image).strip().lower().endswith('ss.jpg'))
                 
                 if has_image_src or has_valid_variant_image:
                     variants[variant_sku]['has_image'] = True
@@ -344,8 +346,9 @@ def load_variant_image_lookup() -> Dict[str, str]:
                 sku_str = str(variant_sku).strip()
                 image_str = str(variant_image).strip()
                 
-                if (sku_str and image_str and 
-                    not image_str.lower().endswith('ss.jpg')):
+                if (sku_str and image_str  
+                    # and not image_str.lower().endswith('ss.jpg')
+                    ):
                     # Transform the URL if needed
                     transformed_url = transform_image_url(image_str)
                     lookup[sku_str] = transformed_url
@@ -381,9 +384,10 @@ def save_sku_no_variant_image_csv(grouped_products: Dict[str, List[Dict[str, Any
             # Check if has SKU but no Variant Image
             has_sku = variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip()
             # Check if variant image exists and is valid (not ending with ss.jpg)
-            has_variant_image = (variant_image and not pd.isna(variant_image) and 
-                               str(variant_image).strip() and 
-                               not str(variant_image).strip().lower().endswith('ss.jpg'))
+            has_variant_image = variant_image and not pd.isna(variant_image) and str(variant_image).strip()
+            # has_variant_image = (variant_image and not pd.isna(variant_image) and 
+            #                    str(variant_image).strip() and 
+            #                    not str(variant_image).strip().lower().endswith('ss.jpg'))
             
             if has_sku and not has_variant_image:
                 # Create a copy of the row to modify
@@ -588,8 +592,10 @@ def save_images_to_insert_csv(grouped_products: Dict[str, List[Dict[str, Any]]])
             has_sku = variant_sku and not pd.isna(variant_sku) and str(variant_sku).strip()
             # Check if variant image exists and is valid (not ending with ss.jpg)
             has_variant_image = (variant_image and not pd.isna(variant_image) and 
-                               str(variant_image).strip() and 
-                               not str(variant_image).strip().lower().endswith('ss.jpg'))
+                               str(variant_image).strip())
+            # has_variant_image = (variant_image and not pd.isna(variant_image) and 
+            #                    str(variant_image).strip() and 
+            #                    not str(variant_image).strip().lower().endswith('ss.jpg'))
             
             if has_sku and not has_variant_image:
                 sku_str = str(variant_sku).strip()

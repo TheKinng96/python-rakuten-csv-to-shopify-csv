@@ -71,7 +71,8 @@ class ImageInserter {
       successful: [],
       failed: [],
       notFound: [],
-      skipped: []
+      skipped: [],
+      mismatchReports: []
     };
   }
 
@@ -82,7 +83,7 @@ class ImageInserter {
       throw new Error('Configuration validation failed');
     }
 
-    this.client = new ShopifyGraphQLClient(false); // Use test store
+    this.client = new ShopifyGraphQLClient(true); // Use test store
     
     await this.client.testConnection();
     console.log('✅ Connected to Shopify test store');
@@ -210,6 +211,20 @@ class ImageInserter {
         return;
       }
 
+      // Check media/variant count mismatch
+      const mediaCount = product.media.edges.length;
+      const variantCount = product.variants.edges.length;
+      if (mediaCount !== variantCount) {
+        console.log(`   ⚠️  Media/variant count mismatch for ${productHandle}: ${mediaCount} media, ${variantCount} variants`);
+        this.insertResults.mismatchReports = this.insertResults.mismatchReports || [];
+        this.insertResults.mismatchReports.push({
+          handle: productHandle,
+          mediaCount,
+          variantCount,
+          title: product.title
+        });
+      }
+
       const variantUpdates = [];
       let processedCount = 0;
       let reusedCount = 0;
@@ -232,28 +247,49 @@ class ImageInserter {
           continue;
         }
 
-        // Check if existing media with same alt text exists (only if altText is provided)
-        let existingMedia = null;
-        if (altText && altText.trim()) {
-          existingMedia = this.findExistingMediaByAlt(product.media, altText);
-        }
+        // Check if image URL ends with ss.jpg (invalid image)
+        const isSsImage = src && src.toLowerCase().endsWith('ss.jpg');
         
-        if (existingMedia) {
-          // Reuse existing media by matching alt text
-          variantUpdates.push({
-            id: variant.id,
-            mediaId: existingMedia.id
-          });
-          reusedCount++;
-          console.log(`   🔄 Reusing existing media for variant ${variantTitleMatch || '1'}: ${altText}`);
+        if (isSsImage) {
+          // Use existing Shopify media based on variant position
+          const variantIndex = product.variants.edges.findIndex(edge => edge.node.id === variant.id);
+          const correspondingMedia = product.media.edges[variantIndex]?.node;
+          
+          if (correspondingMedia) {
+            variantUpdates.push({
+              id: variant.id,
+              mediaId: correspondingMedia.id
+            });
+            reusedCount++;
+            console.log(`   🔄 Using existing Shopify media for variant ${variantTitleMatch || '1'} (ss.jpg detected): ${correspondingMedia.alt || 'No alt'}`);
+          } else {
+            console.log(`   ⚠️  No corresponding media found for variant ${variantTitleMatch || '1'} with ss.jpg image`);
+            continue;
+          }
         } else {
-          // Upload new media using mediaSrc (for products like bos-toilet15 with no matching alt)
-          variantUpdates.push({
-            id: variant.id,
-            mediaSrc: [src]
-          });
-          newUploadsCount++;
-          console.log(`   📤 Will upload new media for variant ${variantTitleMatch || '1'}: ${src}`);
+          // Check if existing media with same alt text exists (only if altText is provided)
+          let existingMedia = null;
+          if (altText && altText.trim()) {
+            existingMedia = this.findExistingMediaByAlt(product.media, altText);
+          }
+          
+          if (existingMedia) {
+            // Reuse existing media by matching alt text
+            variantUpdates.push({
+              id: variant.id,
+              mediaId: existingMedia.id
+            });
+            reusedCount++;
+            console.log(`   🔄 Reusing existing media for variant ${variantTitleMatch || '1'}: ${altText}`);
+          } else {
+            // Upload new media using mediaSrc (for products like bos-toilet15 with no matching alt)
+            variantUpdates.push({
+              id: variant.id,
+              mediaSrc: [src]
+            });
+            newUploadsCount++;
+            console.log(`   📤 Will upload new media for variant ${variantTitleMatch || '1'}: ${src}`);
+          }
         }
         
         processedCount++;
@@ -372,6 +408,7 @@ class ImageInserter {
         failed: this.insertResults.failed.length,
         notFound: this.insertResults.notFound.length,
         skipped: this.insertResults.skipped.length,
+        mismatchReports: this.insertResults.mismatchReports.length,
         totalVariantsUpdated: this.insertResults.successful.reduce((sum, result) => 
           sum + (result.variantsUpdated || 0), 0
         ),
@@ -395,7 +432,7 @@ class ImageInserter {
   }
 
   printSummary() {
-    const { successful, failed, notFound, skipped } = this.insertResults;
+    const { successful, failed, notFound, skipped, mismatchReports } = this.insertResults;
     const total = successful.length + failed.length + notFound.length + skipped.length;
     const totalVariantsUpdated = successful.reduce((sum, result) => sum + (result.variantsUpdated || 0), 0);
     const totalMediaReused = successful.reduce((sum, result) => sum + (result.reusedMedia || 0), 0);
@@ -409,6 +446,7 @@ class ImageInserter {
     console.log(`❌ Failed: ${failed.length}`);
     console.log(`🔍 Not found: ${notFound.length}`);
     console.log(`⏭️  Skipped: ${skipped.length}`);
+    console.log(`⚠️  Media/variant count mismatches: ${mismatchReports.length}`);
     console.log(`🔗 Total variants updated: ${totalVariantsUpdated}`);
     console.log(`🔄 Media reused (existing): ${totalMediaReused}`);
     console.log(`📤 New media uploads: ${totalNewUploads}`);
@@ -416,6 +454,13 @@ class ImageInserter {
     if (total > 0) {
       const successRate = ((successful.length + skipped.length) / total * 100).toFixed(1);
       console.log(`📈 Success rate: ${successRate}%`);
+    }
+    
+    if (mismatchReports.length > 0) {
+      console.log('\n⚠️  Products with media/variant count mismatches:');
+      mismatchReports.forEach(report => {
+        console.log(`   ${report.handle}: ${report.mediaCount} media, ${report.variantCount} variants`);
+      });
     }
     
     if (shopifyConfig.dryRun) {
@@ -427,6 +472,9 @@ class ImageInserter {
     console.log('   1. Review association results in reports/04_image_insert_results.json');
     console.log('   2. Check product variants with new images in Shopify admin');
     console.log('   3. Verify variant-specific image associations');
+    if (mismatchReports.length > 0) {
+      console.log('   4. Review products with media/variant count mismatches');
+    }
   }
 }
 
