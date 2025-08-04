@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * Update Shopify product descriptions by removing EC-UP content
+ * Update Shopify product descriptions
  * 
- * This script:
- * 1. Reads extracted SKU rows from CSV (from 05_extract_sku_rows.py)
- * 2. For each product handle, removes EC-UP patterns from descriptionHtml
- * 3. Updates products via GraphQL using 2025-07 API
- * 4. Provides progress logging and error handling
+ * This script can handle two types of updates:
+ * 1. EC-UP content removal (default) - reads from rakuten_content_to_clean.json
+ * 2. HTML table fixes - reads from html_table_fixes_to_update.json (use --html-table-fix flag)
+ * 
+ * Usage:
+ *   node 06_update_products_description.js                  # EC-UP removal
+ *   node 06_update_products_description.js --html-table-fix # HTML table fixes
+ *   node 06_update_products_description.js --test-handle <handle> # Test with single product
+ *   node 06_update_products_description.js --html-table-fix --test-handle <handle> # Test HTML fix with single product
  * 
  * CHECK: DONE
  */
@@ -68,12 +72,12 @@ class ProductDescriptionUpdater {
     await this.client.testConnection();
     console.log('✅ Connected to Shopify test store');
   }
-
-  loadProductDataFromJSON() {
-    const jsonPath = join(pathConfig.sharedPath, 'rakuten_content_to_clean.json');
+          
+  loadProductDataFromJSON(jsonFile = 'html_table_fixes_to_update.json') {
+    const jsonPath = join(pathConfig.sharedPath, jsonFile);
     
     if (!existsSync(jsonPath)) {
-      throw new Error(`Rakuten content JSON file not found: ${jsonPath}`);
+      throw new Error(`JSON file not found: ${jsonPath}`);
     }
 
     console.log(`📂 Loading product data from ${jsonPath}...`);
@@ -130,7 +134,10 @@ class ProductDescriptionUpdater {
 
       // Update product with cleaned HTML
       if (shopifyConfig.dryRun) {
-        console.log(`   🔍 [DRY RUN] Would remove ${patternsRemoved.length} EC-UP patterns (${bytesRemoved} bytes) from: ${productHandle}`);
+        const dryRunMessage = patternsRemoved && patternsRemoved.length > 0 
+          ? `Would remove ${patternsRemoved.length} patterns (${bytesRemoved} bytes)`
+          : `Would update HTML (${bytesRemoved} bytes changed)`;
+        console.log(`   🔍 [DRY RUN] ${dryRunMessage} from: ${productHandle}`);
         this.updateResults.successful.push({
           handle: productHandle,
           title: product.title,
@@ -155,7 +162,10 @@ class ProductDescriptionUpdater {
         throw new Error(`Shopify errors: ${errors.join(', ')}`);
       }
 
-      console.log(`   ✅ [${index}/${total}] Removed ${patternsRemoved.length} EC-UP patterns (${bytesRemoved} bytes) from: ${productHandle}`);
+      const updateMessage = patternsRemoved && patternsRemoved.length > 0 
+        ? `Removed ${patternsRemoved.length} patterns (${bytesRemoved} bytes)`
+        : `Updated HTML (${bytesRemoved} bytes changed)`;
+      console.log(`   ✅ [${index}/${total}] ${updateMessage} from: ${productHandle}`);
       
       this.updateResults.successful.push({
         handle: productHandle,
@@ -227,7 +237,7 @@ class ProductDescriptionUpdater {
         notFound: this.updateResults.notFound.length,
         noChangesNeeded: this.updateResults.noChangesNeeded.length,
         totalPatternsRemoved: this.updateResults.successful.reduce((sum, result) => 
-          sum + (result.patternsRemoved || 0), 0
+          sum + (result.patternsRemoved || 1), 0
         ),
         totalBytesRemoved: this.updateResults.successful.reduce((sum, result) => 
           sum + (result.bytesRemoved || 0), 0
@@ -259,8 +269,8 @@ class ProductDescriptionUpdater {
     console.log(`✅ Successfully updated: ${successful.length}`);
     console.log(`❌ Failed: ${failed.length}`);
     console.log(`🔍 Not found: ${notFound.length}`);
-    console.log(`ℹ️  No EC-UP content: ${noChangesNeeded.length}`);
-    console.log(`🏷️  Total EC-UP patterns removed: ${totalPatternsRemoved}`);
+    console.log(`ℹ️  No changes needed: ${noChangesNeeded.length}`);
+    console.log(`🏷️  Total patterns/changes: ${totalPatternsRemoved}`);
     console.log(`💾 Total bytes removed: ${(totalBytesRemoved / 1024).toFixed(1)} KB`);
     
     if (total > 0) {
@@ -281,8 +291,22 @@ class ProductDescriptionUpdater {
 }
 
 async function main() {
+  // Check command line arguments
+  const args = process.argv.slice(2);
+  const isHtmlTableFix = args.includes('--html-table-fix');
+  
+  // Check for test handle argument
+  let testHandle = null;
+  const testHandleIndex = args.findIndex(arg => arg === '--test-handle');
+  if (testHandleIndex !== -1 && args[testHandleIndex + 1]) {
+    testHandle = args[testHandleIndex + 1];
+  }
+  
+  const jsonFile = isHtmlTableFix ? 'html_table_fixes_to_update.json' : 'rakuten_content_to_clean.json';
+  const updateType = isHtmlTableFix ? 'HTML TABLE FIX' : 'EC-UP REMOVAL';
+  
   console.log('='.repeat(70));
-  console.log('📝 PRODUCT DESCRIPTION UPDATE (EC-UP REMOVAL)');
+  console.log(`📝 PRODUCT DESCRIPTION UPDATE (${updateType})`);
   console.log('='.repeat(70));
 
   const updater = new ProductDescriptionUpdater();
@@ -290,7 +314,19 @@ async function main() {
   try {
     await updater.initialize();
     
-    const productDataArray = updater.loadProductDataFromJSON();
+    let productDataArray = updater.loadProductDataFromJSON(jsonFile);
+    
+    // Filter by test handle if provided
+    if (testHandle) {
+      console.log(`\n🔍 Filtering for test handle: ${testHandle}`);
+      productDataArray = productDataArray.filter(product => product.productHandle === testHandle);
+      
+      if (productDataArray.length === 0) {
+        console.log(`⚠️ No products found with handle: ${testHandle}`);
+        return;
+      }
+      console.log(`✅ Found ${productDataArray.length} product(s) with handle: ${testHandle}`);
+    }
     
     if (productDataArray.length === 0) {
       console.log('⚠️ No product data found to process');
