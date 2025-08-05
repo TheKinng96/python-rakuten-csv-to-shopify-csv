@@ -11,6 +11,7 @@
  *   node 06_update_products_description.js --html-table-fix # HTML table fixes
  *   node 06_update_products_description.js --test-handle <handle> # Test with single product
  *   node 06_update_products_description.js --html-table-fix --test-handle <handle> # Test HTML fix with single product
+ *   node 06_update_products_description.js --html-table-fix --resume-from 6250 # Resume from product 6250
  * 
  * CHECK: DONE
  */
@@ -68,7 +69,6 @@ class ProductDescriptionUpdater {
     }
 
     this.client = new ShopifyGraphQLClient(true); // Use test store
-    
     await this.client.testConnection();
     console.log('✅ Connected to Shopify test store');
   }
@@ -191,7 +191,7 @@ class ProductDescriptionUpdater {
     }
   }
 
-  async processProducts(productDataArray) {
+  async processProducts(productDataArray, resumeFrom = 0) {
     console.log(`\n🚀 Starting product description updates (${productDataArray.length} products)...`);
     
     const batchSize = shopifyConfig.batchSize;
@@ -206,7 +206,7 @@ class ProductDescriptionUpdater {
       
       // Process batch with concurrency limit
       const promises = batch.map((productData, batchIndex) => 
-        this.updateProductDescription(productData, i + batchIndex + 1, total)
+        this.updateProductDescription(productData, resumeFrom + i + batchIndex + 1, resumeFrom + total)
       );
       
       await Promise.all(promises);
@@ -302,6 +302,17 @@ async function main() {
     testHandle = args[testHandleIndex + 1];
   }
   
+  // Check for resume-from argument
+  let resumeFrom = 0;
+  const resumeFromIndex = args.findIndex(arg => arg === '--resume-from');
+  if (resumeFromIndex !== -1 && args[resumeFromIndex + 1]) {
+    resumeFrom = parseInt(args[resumeFromIndex + 1], 10);
+    if (isNaN(resumeFrom) || resumeFrom < 0) {
+      console.error('❌ Invalid --resume-from value. Must be a positive number.');
+      process.exit(1);
+    }
+  }
+  
   const jsonFile = isHtmlTableFix ? 'html_table_fixes_to_update.json' : 'rakuten_content_to_clean.json';
   const updateType = isHtmlTableFix ? 'HTML TABLE FIX' : 'EC-UP REMOVAL';
   
@@ -333,6 +344,18 @@ async function main() {
       return;
     }
 
+    // Apply resume-from if specified
+    if (resumeFrom > 0) {
+      console.log(`\n📍 Resuming from product ${resumeFrom} (skipping first ${resumeFrom} products)`);
+      productDataArray = productDataArray.slice(resumeFrom);
+      
+      if (productDataArray.length === 0) {
+        console.log(`⚠️ No products to process after resuming from index ${resumeFrom}`);
+        return;
+      }
+      console.log(`📦 Will process ${productDataArray.length} remaining products`);
+    }
+
     // Confirmation for live updates
     if (!shopifyConfig.dryRun) {
       console.log(`\n⚠️  LIVE UPDATE MODE - This will update descriptions for ${productDataArray.length} products!`);
@@ -340,7 +363,7 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
 
-    await updater.processProducts(productDataArray);
+    await updater.processProducts(productDataArray, resumeFrom);
     updater.saveUpdateResults();
     updater.printSummary();
 

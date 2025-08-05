@@ -61,12 +61,71 @@ def fix_table_html(html_content):
             # Add responsive CSS classes and styles
             # Check if table contains images to determine width strategy
             table_has_images = len(table.find_all('img')) > 0
+            
+            # Preserve existing style and border attributes
+            existing_style = table.get('style', '')
+            border_attr = table.get('border', '')
+            bordercolor_attr = table.get('bordercolor', '')
+            
+            # Build border styles from attributes if they exist
+            border_styles = []
+            if border_attr:
+                border_styles.append(f'border: {border_attr}px solid')
+            if bordercolor_attr:
+                if border_attr:
+                    border_styles[-1] = f'border: {border_attr}px solid {bordercolor_attr}'
+                else:
+                    border_styles.append(f'border: 1px solid {bordercolor_attr}')
+            
+            # Check if table has no border but cells do (like yamaya-miso413 case)
+            if not border_attr and not bordercolor_attr and 'border:' not in existing_style:
+                # Check if any cells have border styles
+                first_cell = table.find(['td', 'th'])
+                if first_cell:
+                    cell_style = first_cell.get('style', '')
+                    # Look for border style in cell
+                    border_match = re.search(r'border:\s*(?:solid\s*)?(\d+)px\s+(?:solid\s+)?([#\w]+)', cell_style)
+                    if not border_match:
+                        # Try alternate format
+                        border_match = re.search(r'border:\s*(\d+)px\s+solid\s+([#\w]+)', cell_style)
+                    
+                    if border_match:
+                        # Cell has border, apply same to table
+                        border_width = border_match.group(1)
+                        border_color = border_match.group(2)
+                        border_styles.append(f'border: {border_width}px solid {border_color}')
+            
+            # Remove width-related styles from existing style but keep border styles
+            cleaned_existing_style = existing_style
+            # Use word boundaries to ensure we match complete property names
+            width_properties = ['table-layout', 'max-width', 'min-width', 'width']  # Order matters - longest first
+            for width_property in width_properties:
+                pattern = rf'\b{re.escape(width_property)}\s*:\s*[^;]+;?\s*'
+                cleaned_existing_style = re.sub(pattern, '', cleaned_existing_style)
+            
+            # Clean up any leftover semicolons and spaces
+            cleaned_existing_style = re.sub(r';\s*;+', ';', cleaned_existing_style)
+            cleaned_existing_style = re.sub(r'^\s*;+', '', cleaned_existing_style)
+            cleaned_existing_style = re.sub(r';+\s*$', '', cleaned_existing_style)
+            cleaned_existing_style = cleaned_existing_style.strip()
+            
+            # Determine width strategy
             if table_has_images:
                 # For tables with images, use auto width to preserve layout
-                table['style'] = 'width: auto; max-width: 100%; table-layout: auto; border-collapse: collapse;'
+                new_styles = 'width: auto; max-width: 100%; table-layout: auto; border-collapse: collapse;'
             else:
                 # For text-only tables, use full width
-                table['style'] = 'width: 100%; max-width: 100%; table-layout: auto; border-collapse: collapse;'
+                new_styles = 'width: 100%; max-width: 100%; table-layout: auto; border-collapse: collapse;'
+            
+            # Combine styles: existing (cleaned) + border attributes + new responsive styles
+            combined_styles = []
+            if cleaned_existing_style.strip():
+                combined_styles.append(cleaned_existing_style.strip().rstrip(';'))
+            if border_styles:
+                combined_styles.extend(border_styles)
+            combined_styles.append(new_styles)
+            
+            table['style'] = '; '.join(filter(None, combined_styles))
             
             # Fix cell attributes
             cells = table.find_all(['td', 'th'])
