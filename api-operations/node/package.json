@@ -1,0 +1,30 @@
+{
+  "name": "shopify-graphql-manager",
+  "version": "1.0.0",
+  "description": "Shopify GraphQL operations for product management",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "import": "node src/00_import_products.js",
+    "remove-ss": "node src/01_remove_ss_images.js",
+    "fix-tables": "node src/02_fix_html_tables.js",
+    "clean-rakuten": "node src/03_clean_rakuten.js",
+    "insert-images": "node src/04_insert_images.js",
+    "test": "node src/test_connection.js"
+  },
+  "dependencies": {
+    "@shopify/admin-api-client": "^1.0.1",
+    "dotenv": "^16.3.1",
+    "csv-parser": "^3.0.0",
+    "csv-writer": "^1.6.0",
+    "commander": "^11.0.0",
+    "jsdom": "^23.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

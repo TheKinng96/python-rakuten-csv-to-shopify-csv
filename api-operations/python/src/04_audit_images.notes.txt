@@ -1,0 +1,109 @@
+query getProduct($handle: String!) {
+    productByIdentifier(identifier: {handle: $handle}) {
+      id
+      handle
+      title
+      media(first: 10) {
+      edges {
+        node {
+          id
+					alt
+        }
+      }
+    }
+    variants(first: 10) {
+      edges {
+        node {
+          id
+          title
+          price
+        }
+      }
+    }
+    }
+  }
+  {
+  "handle": "ami-chuka1800"
+}
+
+mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+  productUpdate(product: {id: $productId}, media: $media) {
+    product {
+      media(first: 10) {
+        nodes {
+          id
+          alt
+        }
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+
+{
+  "productId": "gid://shopify/Product/10111265866044",
+  "media": [
+    {
+      "originalSource": "https://tshop.r10s.jp/gold/tsutsu-uraura/ss-serch/4970017040923-25ss.jpg",
+      "alt": "《スーパーSALE限定10%OFF》あみ印中華スープ1.8L",
+      "mediaContentType": "IMAGE"
+    }
+  ]
+}
+
+{
+  "data": {
+    "productCreateMedia": {
+      "media": [
+        {
+          "id": "gid://shopify/ProductImage/9876543210987", // <<-- CAPTURE THIS ID!
+          "mediaContentType": "IMAGE",
+          "status": "UPLOADED",
+          "image": {
+            "id": "gid://shopify/ProductImage/9876543210987",
+            "url": "https://cdn.shopify.com/s/files/1/.../...",
+            "altText": "test"
+          }
+        }
+      ],
+      "mediaUserErrors": []
+    }
+  }
+}
+
+mutation productVariantBulkUpdate($variantUpdates: [ProductVariantInput!]!) {
+  productVariantBulkUpdate(variants: $variantUpdates) {
+    productVariants {
+      id
+      image {
+        id
+        url
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+
+{
+  "variantUpdates": [
+    {
+      "id": "gid://shopify/ProductVariant/51955714261308",
+      "image": {
+        "id": "gid://shopify/ProductImage/9876543210987" // <-- Use the ID from Step 1
+      }
+    }
+  ]
+}
+
+
+"id": "gid://shopify/Product/10111265866044", // product
+"node": {
+              "id": "gid://shopify/MediaImage/43287252894012",
+              "alt": "《スーパーSALE限定10%OFF》あみ印中華スープ1.8L"
+            }

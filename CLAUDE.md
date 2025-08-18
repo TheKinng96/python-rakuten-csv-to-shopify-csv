@@ -4,17 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Rakuten-to-Shopify CSV conversion system that transforms large Rakuten product exports (≈500MB) into Shopify-ready product CSV files. The project handles product data migration, image processing, metafield mapping, and category management.
+This is a comprehensive Rakuten-to-Shopify migration system with two main workflows:
+
+1. **CSV Conversion**: Transforms large Rakuten product exports (≈500MB) into Shopify-ready product CSV files
+2. **API Operations**: Handles live Shopify API interactions for product data manipulation, including table content editing and bulk operations
 
 ## Architecture
 
 ### Core Components
 
-- **`manual/final/main.py`** - Main conversion script that processes Rakuten CSV exports and generates Shopify-compatible CSV files
-- **`manual/constants/`** - Shared constants and mappings for Rakuten and Shopify field definitions
-- **`manual/csv_utils/`** - Utility scripts for CSV manipulation (splitting, merging, column removal, row counting)
-- **`manual/analysis/`** - Analysis scripts for metafields, SKU validation, and data quality checks
-- **`manual/app/`** - GUI application for processing with PySimpleGUI interface
+#### CSV Conversion (`csv-conversion/`)
+- **`src/main.py`** - Main conversion script that processes Rakuten CSV exports and generates Shopify-compatible CSV files
+- **`src/constants/`** - Shared constants and mappings for Rakuten and Shopify field definitions
+- **`src/utils/`** - Utility scripts for CSV manipulation, analysis, SKU validation, and data quality checks
+- **`src/gui/`** - GUI application for processing with PySimpleGUI interface
+
+#### API Operations (`api-operations/`)
+- **`node/src/`** - Node.js scripts for direct Shopify GraphQL API operations (table content editing, image management, bulk updates)
+- **`python/src/`** - Python analysis and audit scripts for data validation and reporting
+- **`node/queries/`** - GraphQL query definitions for Shopify API
+- **`shared/`** - Shared data files between Node.js and Python tools
 
 ### Data Flow
 
@@ -32,10 +41,10 @@ This is a Rakuten-to-Shopify CSV conversion system that transforms large Rakuten
 
 ## Development Commands
 
-### Setup Environment
+### CSV Conversion Setup
 ```bash
-# Navigate to the main processing directory
-cd manual/final
+# Navigate to CSV conversion directory
+cd csv-conversion/src
 
 # Create and activate virtual environment
 python -m venv venv
@@ -45,48 +54,83 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install pandas beautifulsoup4 lxml
 ```
 
-### Running the Main Conversion
+### Running CSV Conversion
 ```bash
-# From manual/final directory
+# From csv-conversion/src directory
 python main.py
 ```
 
-### Running Utility Scripts
+### CSV Utility Scripts
 ```bash
-# CSV utilities (from manual/csv_utils/)
+# From csv-conversion/src/utils directory
 python split_csv_by_size.py
 python merge_rakuten_files.py
 python count_csv_rows.py
-
-# Analysis scripts (from manual/analysis/)
 python analyze_metafields.py
 python check_mismatched_items.py
 ```
 
 ### GUI Application
 ```bash
-# From manual/app directory
+# From csv-conversion/src/gui directory
 pip install -r requirements.txt
 python app.py
 ```
 
+### API Operations Setup
+```bash
+# Navigate to API operations directory
+cd api-operations/node
+
+# Install Node.js dependencies
+npm install
+
+# Copy environment configuration
+cp ../../.env.example ../../.env
+# Edit .env with your Shopify credentials
+```
+
+### Running API Operations
+```bash
+# Node.js operations (from api-operations/node directory)
+node src/06_update_products_description.js
+node src/02_fix_html_tables.js
+node src/01_remove_ss_images.js
+
+# Python analysis (from api-operations/python/src directory)
+python 01_analyze_shopify_products.py
+python 02_analyze_html_tables.py
+```
+
 ## File Structure Conventions
 
-### Input Data Structure
+### CSV Conversion Data Structure
 ```
-manual/final/data/
-├── rakuten_item.csv           # Main product data
-├── rakuten_collection.csv     # Category/collection data
-└── mapping_meta.json          # Attribute mapping configuration
+csv-conversion/
+├── data/
+│   ├── rakuten_item.csv           # Main product data
+│   ├── rakuten_collection.csv     # Category/collection data
+│   └── mapping_meta.json          # Attribute mapping configuration
+└── output/
+    ├── shopify_products.csv                    # Main cleaned output
+    ├── shopify_products_original_html.csv      # Output with original HTML
+    ├── body_html_comparison.csv                # HTML cleaning comparison log
+    └── rejected_rows.csv                       # Filtered/rejected data log
 ```
 
-### Output Structure
+### API Operations Data Structure
 ```
-manual/final/output/
-├── shopify_products.csv                    # Main cleaned output
-├── shopify_products_original_html.csv      # Output with original HTML
-├── body_html_comparison.csv                # HTML cleaning comparison log
-└── rejected_rows.csv                       # Filtered/rejected data log
+api-operations/
+├── data/
+│   ├── products_export_1.csv     # Shopify product exports
+│   ├── products_export_2.csv     # (split by size for processing)
+│   └── ...
+├── reports/
+│   ├── html_table_fixes_report.json        # Table fixing operation results
+│   ├── 06_description_update_results.json  # Description update results
+│   └── variant_images_check_report.json    # Image validation reports
+└── shared/
+    └── html_table_fixes_to_update.json     # Shared data between operations
 ```
 
 ## Configuration Files
