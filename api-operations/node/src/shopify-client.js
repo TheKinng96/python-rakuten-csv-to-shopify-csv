@@ -136,14 +136,29 @@ export class ShopifyGraphQLClient {
     const { queryString, variables } = request;
 
     const response = await this.client.request(queryString, { variables });
-
-    // Check for GraphQL errors
-    if (response.errors && response.errors.length > 0) {
-      const errorMessages = response.errors.map(e => e.message).join(', ');
-      throw new Error(`GraphQL errors: ${errorMessages}`);
+    
+    // Handle error response structure from Shopify client
+    if (response.errors) {
+      const graphQLErrors = response.errors.graphQLErrors || [];
+      if (graphQLErrors.length > 0) {
+        const errorMessages = graphQLErrors.map(e => e.message).join('; ');
+        console.error('GraphQL Errors:', graphQLErrors);
+        throw new Error(`GraphQL errors: ${errorMessages}`);
+      }
+      // Generic error
+      throw new Error(response.errors.message || 'Unknown GraphQL error');
     }
 
-    return response.data;
+    // Handle both response.data and direct response structures
+    if (response.data) {
+      return response.data;
+    } else if (response.orderCreate) {
+      // Response might be the data directly
+      return response;
+    } else {
+      // No data property - might be an error
+      throw new Error('Invalid response structure from Shopify API');
+    }
   }
 
   /**

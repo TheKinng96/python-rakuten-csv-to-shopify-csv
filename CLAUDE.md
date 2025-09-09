@@ -102,6 +102,12 @@ python 01_analyze_shopify_products.py
 python 02_analyze_html_tables.py
 ```
 
+### Test Order Creation
+```bash
+# Create test orders with Japanese payment methods (from api-operations/node directory)
+node src/create_test_orders.js
+```
+
 ## File Structure Conventions
 
 ### CSV Conversion Data Structure
@@ -153,3 +159,36 @@ No formal test framework is configured. Testing is done by:
 2. Validating output CSV structure
 3. Checking Shopify import preview
 4. Verifying metafield mappings and category assignments
+
+### Test Order Creation (Japanese Payment Methods)
+
+The system includes functionality to create test orders with various Japanese payment methods for testing POS integrations and payment workflows:
+
+#### Available Payment Methods
+- **Suica** - IC card contactless payment with balance tracking
+- **Credit Card** - Visa/Mastercard with authorization codes
+- **PayPay** - QR code digital wallet payment
+- **Cash** - Manual cash transactions with change calculation
+- **Mixed Payment** - Combination payments (e.g., Suica + Cash)
+- **Rakuten Pay** - Rakuten ecosystem payment with points
+
+#### Test Order Structure
+Each test order includes:
+- **Line Items**: Product variants with quantities
+- **Transactions**: Payment transaction details with amounts
+- **Custom Attributes**: Payment-specific metadata (card IDs, transaction IDs, balances)
+- **Tags**: Payment method categorization for filtering
+- **Financial Status**: Automatically set to PAID for completed transactions
+
+#### GraphQL Implementation
+Uses Shopify Admin API 2025-07 with the `orderCreate` mutation:
+- Input type: `OrderCreateOrderInput`
+- Transaction amounts use `amountSet` with `shopMoney` objects
+- All amounts in Japanese Yen (JPY)
+- Custom attributes store detailed payment method information
+
+#### Usage
+1. Get product variant IDs using the `getProductVariants` query
+2. Run `node src/create_test_orders.js` to generate test orders
+3. Verify orders in Shopify Admin with payment method details
+4. Use for testing POS system integrations and payment processing workflows
