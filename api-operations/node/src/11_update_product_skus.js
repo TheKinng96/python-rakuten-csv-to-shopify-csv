@@ -311,7 +311,6 @@ async function main() {
   // Check command line arguments
   const args = process.argv.slice(2);
   const isDryRun = args.includes('--dry-run');
-  const useProductionStore = args.includes('--production');
   
   // Override shopifyConfig.dryRun if dry-run flag is provided
   if (isDryRun) {
