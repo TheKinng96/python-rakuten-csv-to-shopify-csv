@@ -2,16 +2,18 @@
 /**
  * Update Shopify product descriptions
  * 
- * This script can handle two types of updates:
+ * This script can handle three types of updates:
  * 1. EC-UP content removal (default) - reads from rakuten_content_to_clean.json
  * 2. HTML table fixes - reads from html_table_fixes_to_update.json (use --html-table-fix flag)
+ * 3. CSS scoping - reads from css_scoped_descriptions.json (use --css-scoping flag)
  * 
  * Usage:
  *   node 06_update_products_description.js                  # EC-UP removal
  *   node 06_update_products_description.js --html-table-fix # HTML table fixes
+ *   node 06_update_products_description.js --css-scoping    # CSS scoping
  *   node 06_update_products_description.js --test-handle <handle> # Test with single product
- *   node 06_update_products_description.js --html-table-fix --test-handle <handle> # Test HTML fix with single product
- *   node 06_update_products_description.js --html-table-fix --resume-from 6250 # Resume from product 6250
+ *   node 06_update_products_description.js --css-scoping --test-handle <handle> # Test CSS scoping with single product
+ *   node 06_update_products_description.js --css-scoping --resume-from 1000 # Resume from product 1000
  * 
  * CHECK: DONE
  */
@@ -73,7 +75,7 @@ class ProductDescriptionUpdater {
     console.log('✅ Connected to Shopify test store');
   }
          
-  loadProductDataFromJSON(jsonFile = 'html_table_fixes_to_update.json') {
+  loadProductDataFromJSON(jsonFile = 'css_scoped_descriptions.json') {
     const jsonPath = join(pathConfig.sharedPath, jsonFile);
     
     if (!existsSync(jsonPath)) {
@@ -84,12 +86,23 @@ class ProductDescriptionUpdater {
     
     const jsonData = JSON.parse(readFileSync(jsonPath, 'utf-8'));
     
-    if (!jsonData.data || !Array.isArray(jsonData.data)) {
+    // Handle different JSON structures
+    let productData;
+    if (jsonData.data && Array.isArray(jsonData.data)) {
+      // Standard format (html_table_fixes_to_update.json, rakuten_content_to_clean.json)
+      productData = jsonData.data;
+    } else if (Array.isArray(jsonData.data)) {
+      // CSS scoping format has data directly in .data
+      productData = jsonData.data;
+    } else if (Array.isArray(jsonData)) {
+      // Direct array format
+      productData = jsonData;
+    } else {
       throw new Error('Invalid JSON structure: expected data array');
     }
 
-    console.log(`✅ Loaded ${jsonData.data.length} products with cleaned HTML from JSON`);
-    return jsonData.data;
+    console.log(`✅ Loaded ${productData.length} products with cleaned HTML from JSON`);
+    return productData;
   }
 
   async findProductByHandle(handle) {
@@ -104,7 +117,11 @@ class ProductDescriptionUpdater {
 
   async updateProductDescription(productData, index, total) {
     try {
-      const { productHandle, cleanedHtml, patternsRemoved, bytesRemoved } = productData;
+      // Handle different data structures
+      const productHandle = productData.productHandle;
+      const cleanedHtml = productData.cleanedHtml || productData.modifiedHtml;
+      const patternsRemoved = productData.patternsRemoved || productData.changes || [];
+      const bytesRemoved = productData.bytesRemoved || productData.bytesChanged || 0;
       
       // Find product in Shopify
       const product = await this.findProductByHandle(productHandle);
@@ -134,16 +151,17 @@ class ProductDescriptionUpdater {
 
       // Update product with cleaned HTML
       if (shopifyConfig.dryRun) {
-        const dryRunMessage = patternsRemoved && patternsRemoved.length > 0 
-          ? `Would remove ${patternsRemoved.length} patterns (${bytesRemoved} bytes)`
-          : `Would update HTML (${bytesRemoved} bytes changed)`;
-        console.log(`   🔍 [DRY RUN] ${dryRunMessage} from: ${productHandle}`);
+        const patternsCount = Array.isArray(patternsRemoved) ? patternsRemoved.length : (productData.changesCount || 0);
+        const dryRunMessage = patternsCount > 0 
+          ? `Would apply ${patternsCount} changes (${Math.abs(bytesRemoved)} bytes changed)`
+          : `Would update HTML (${Math.abs(bytesRemoved)} bytes changed)`;
+        console.log(`   🔍 [DRY RUN] ${dryRunMessage} for: ${productHandle}`);
         this.updateResults.successful.push({
           handle: productHandle,
           title: product.title,
           status: 'dry_run',
-          patternsRemoved: patternsRemoved.length,
-          bytesRemoved,
+          patternsRemoved: patternsCount,
+          bytesRemoved: Math.abs(bytesRemoved),
           shopifyId: product.id,
           patterns: patternsRemoved
         });
@@ -162,22 +180,24 @@ class ProductDescriptionUpdater {
         throw new Error(`Shopify errors: ${errors.join(', ')}`);
       }
 
-      const updateMessage = patternsRemoved && patternsRemoved.length > 0 
-        ? `Removed ${patternsRemoved.length} patterns (${bytesRemoved} bytes)`
-        : `Updated HTML (${bytesRemoved} bytes changed)`;
-      console.log(`   ✅ [${index}/${total}] ${updateMessage} from: ${productHandle}`);
+      const patternsCount = Array.isArray(patternsRemoved) ? patternsRemoved.length : (productData.changesCount || 0);
+      const updateMessage = patternsCount > 0 
+        ? `Applied ${patternsCount} changes (${Math.abs(bytesRemoved)} bytes changed)`
+        : `Updated HTML (${Math.abs(bytesRemoved)} bytes changed)`;
+      console.log(`   ✅ [${index}/${total}] ${updateMessage} for: ${productHandle}`);
       
       this.updateResults.successful.push({
         handle: productHandle,
         title: product.title,
         status: 'description_updated',
-        patternsRemoved: patternsRemoved.length,
-        bytesRemoved,
+        patternsRemoved: patternsCount,
+        bytesRemoved: Math.abs(bytesRemoved),
         shopifyId: product.id,
         patterns: patternsRemoved,
         originalHtmlLength: currentHtml.length,
         cleanedHtmlLength: cleanedHtml.length,
-        compressionRatio: ((1 - cleanedHtml.length / currentHtml.length) * 100).toFixed(1) + '%'
+        compressionRatio: cleanedHtml.length !== currentHtml.length ? 
+          ((1 - cleanedHtml.length / currentHtml.length) * 100).toFixed(1) + '%' : '0%'
       });
 
     } catch (error) {
@@ -294,6 +314,7 @@ async function main() {
   // Check command line arguments
   const args = process.argv.slice(2);
   const isHtmlTableFix = args.includes('--html-table-fix');
+  const isCssScoping = args.includes('--css-scoping');
   
   // Check for test handle argument
   let testHandle = null;
@@ -313,8 +334,17 @@ async function main() {
     }
   }
   
-  const jsonFile = isHtmlTableFix ? 'html_table_fixes_to_update.json' : 'rakuten_content_to_clean.json';
-  const updateType = isHtmlTableFix ? 'HTML TABLE FIX' : 'EC-UP REMOVAL';
+  let jsonFile, updateType;
+  if (isCssScoping) {
+    jsonFile = 'css_scoped_descriptions.json';
+    updateType = 'CSS SCOPING';
+  } else if (isHtmlTableFix) {
+    jsonFile = 'css_scoped_descriptions.json';
+    updateType = 'HTML TABLE FIX';
+  } else {
+    jsonFile = 'rakuten_content_to_clean.json';
+    updateType = 'EC-UP REMOVAL';
+  }
   
   console.log('='.repeat(70));
   console.log(`📝 PRODUCT DESCRIPTION UPDATE (${updateType})`);

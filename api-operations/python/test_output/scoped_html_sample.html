@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Scoping Test</title>
+    <style>
+        /* Simulate theme styles that should NOT be affected */
+        body { font-family: Arial; margin: 20px; }
+        img { border: 5px solid red; /* Should NOT affect product images */ }
+        hr { border: 5px solid blue; margin: 50px 0; /* Should NOT affect product HRs */ }
+        table { background: yellow; /* Should NOT affect product tables */ }
+    </style>
+</head>
+<body>
+    <h1>Theme Header (should not be affected)</h1>
+    <img src="https://via.placeholder.com/150" alt="Theme image">
+    <hr>
+    
+    <h2>Product Description Area:</h2>
+    <div class="shopify-product-description" data-product-handle="test-product-handle"><div class="tab__container --A is-active">
+<style>.shopify-product-description hr {
+width: 100% !important;
+  max-width: 100% !important;
+  margin: 7rem 0; /* Desktop margin */
+}
+@media (max-width: 768px) {
+  .shopify-product-description .mobile-responsive-img, .shopify-product-description img {
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    display: block !important;
+    margin: 0 auto !important;
+  }
+  .shopify-product-description .mobile-responsive-text, .shopify-product-description [style*="white-space:nowrap"], .shopify-product-description [style*="white-space: nowrap"] {
+    white-space: normal !important;
+    font-size: 16px !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+  .shopify-product-description .mobile-responsive-hr, .shopify-product-description hr {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin: 2rem 0 !important; /* Reduced from 7rem to 2rem on mobile */
+  }
+  .shopify-product-description .mobile-responsive-table {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    overflow: visible !important;
+    margin: 16px 0 !important;
+  }
+  .shopify-product-description .mobile-responsive-table tbody, .shopify-product-description .mobile-responsive-table thead, .shopify-product-description .mobile-responsive-table tfoot {
+    display: block !important;
+    width: 100% !important;
+  }
+  .shopify-product-description .mobile-responsive-table tr {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important; /* No margin between rows */
+    padding: 0 !important;
+    border-left: 1px solid #e0e0e0 !important;
+    border-right: 1px solid #e0e0e0 !important;
+    border-top: none !important;
+    border-bottom: 1px solid #e0e0e0 !important;
+    background: #fff !important;
+    border-radius: 0 !important; 
+    margin-bottom: 0 !important;
+  }
+  .shopify-product-description *[width] {
+    max-width: 100% !important;
+    width: auto !important;
+  }
+}</style>
+<div style="font-family:-apple-system, BlinkMacSystemFont, 'Helvetica Neue', YuGothic, 'ヒラギノ角ゴ ProN W3', Hiragino Kaku Gothic ProN, Arial, 'メイリオ', Meiryo, sans-serif;  font-size: 16px; line-height:160%;width: 100%;color: #222222;">
+<h4 style="font-weight: 900;color:#FF9933; text-align:center;margin: .8em 0;line-height: 160%;font-size:1.6em">国産有機 白玉（しろたま）梅干</h4>
+<h5 style="font-weight: 900;margin: .8em 0; color:#FFF;padding: .4em;  background-color:#FF9933; text-align:center;font-size:1.2em">有機JAS認証</h5>
+<div class="mobile-responsive-flex" style=" display:flex;flex-wrap:wrap;margin:0 auto;width:auto;"><div style="flex:1 1 400px">
+<p style="margin:auto;">
+        奈良吉野や紀州の有機梅を伝統海塩「海の精」だけで熟成させました。<br/>
+        丁寧に天日干しした白梅干です。<br/></p>
+<p style="margin:.6em 0;">
+        食塩は伝統海塩「海の精」を使用しています。</p>
+</div></div>
+<br/>
+<table class="mobile-responsive-table">
+<tr><td>名称</td><td>有機梅干</td></tr>
+<tr><td>原材料名</td><td>有機梅（国産）、漬け原材料（食塩）</td></tr>
+</table>
+</div>
+</div></div>
+    
+    <hr>
+    <h2>Theme Footer (should not be affected)</h2>
+    <table><tr><td>Theme table</td></tr></table>
+</body>
+</html>
