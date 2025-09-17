@@ -92,3 +92,12 @@ All operations generate detailed reports in the `reports/` directory:
 - `06_description_update_results.json` - Description update results
 
 See the main CLAUDE.md for detailed setup and usage instructions.
+
+# Rakuten to shopify 
+
+## Rules
+
+- remove -ss
+- merge all -*s into one handle
+- tax matching [document](data/with-tax.csv), if doesnt have the record, to simple split by food or non-food, exceptional alcohols are 10% tax
+- image rule: cabinet and gold have different image path pattern
