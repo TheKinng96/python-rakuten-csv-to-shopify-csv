@@ -11,9 +11,9 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { shopifyConfig, pathConfig, getStoreConfig, validateConfig } from './config.js';
-import { ShopifyGraphQLClient } from './shopify-client.js';
-import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION, PRODUCT_VARIANT_UPDATE_MUTATION, LOCATIONS_QUERY } from '../queries/productCreate.js';
+import { shopifyConfig, pathConfig, getStoreConfig, validateConfig } from '../config.js';
+import { ShopifyGraphQLClient } from '../shopify-client.js';
+import { PRODUCT_CREATE_MUTATION, PRODUCT_VARIANTS_BULK_CREATE_MUTATION, PRODUCT_VARIANT_UPDATE_MUTATION, LOCATIONS_QUERY } from '../../queries/productCreate.js';
 
 class ProductImporter {
   constructor() {

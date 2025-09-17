@@ -12,8 +12,8 @@
 
 import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { pathConfig, shopifyConfig, validateConfig } from './config.js';
-import { ShopifyGraphQLClient } from './shopify-client.js';
+import { pathConfig, shopifyConfig, validateConfig } from '../config.js';
+import { ShopifyGraphQLClient } from '../shopify-client.js';
 
 // Mutation to update product metafield
 const UPDATE_PRODUCT_METAFIELD = `

@@ -11,8 +11,8 @@
 
 import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { pathConfig, shopifyConfig, validateConfig } from './config.js';
-import { ShopifyGraphQLClient } from './shopify-client.js';
+import { pathConfig, shopifyConfig, validateConfig } from '../config.js';
+import { ShopifyGraphQLClient } from '../shopify-client.js';
 
 // GraphQL query to scan products and variants for size metafields
 const SCAN_PRODUCTS_VARIANTS = `

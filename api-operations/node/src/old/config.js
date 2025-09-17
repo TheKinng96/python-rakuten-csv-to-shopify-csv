@@ -39,13 +39,13 @@ export const shopifyConfig = {
 
 export const pathConfig = {
   // Updated paths for new directory structure
-  csvDataPath: join(__dirname, '../../data'),
-  reportsPath: join(__dirname, '../../reports'),
-  sharedPath: join(__dirname, '../../shared'),
+  csvDataPath: join(__dirname, '../data'),
+  reportsPath: join(__dirname, '../reports'),
+  sharedPath: join(__dirname, '../shared'),
   queriesPath: join(__dirname, '../queries'),
   
   // Python scripts path for integration
-  pythonScriptsPath: join(__dirname, '../../python/src'),
+  pythonScriptsPath: join(__dirname, '../python/src'),
 };
 
 /**
