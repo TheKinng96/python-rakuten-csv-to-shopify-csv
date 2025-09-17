@@ -1,0 +1,36 @@
+{
+  "encoding": {
+    "input": "shift-jis",
+    "output": "utf-8"
+  },
+  "shopify": {
+    "cdn_base_url": "https://cdn.shopify.com/s/files/1/0637/6059/7127/files/",
+    "scope_class": "shopify-product-description",
+    "max_images_per_product": 20
+  },
+  "tax": {
+    "default_rate": "10%",
+    "reduced_rate": "8%",
+    "standard_rate": "10%"
+  },
+  "processing": {
+    "chunk_size": 10000,
+    "skip_ss_skus": true,
+    "fix_gold_urls": true,
+    "scope_css": true,
+    "remove_ec_up": true,
+    "fix_table_fonts": true,
+    "mobile_responsive_tables": true
+  },
+  "validation": {
+    "require_tax_rates": true,
+    "require_product_types": true,
+    "validate_html": true,
+    "check_image_urls": true
+  },
+  "output": {
+    "generate_reports": true,
+    "create_image_manifest": true,
+    "detailed_logging": true
+  }
+}

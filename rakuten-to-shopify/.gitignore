@@ -1,0 +1,60 @@
+# Downloaded images (too large for git)
+images/description_images/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# Large data files
+data/input/*.csv
+output/csv/*.csv
+output/reports/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+output/logs/*.log
+*.log
+
+# But keep directory structure
+!.gitkeep
+!*/README.md
+!docs/examples/
+!tests/test_data/
