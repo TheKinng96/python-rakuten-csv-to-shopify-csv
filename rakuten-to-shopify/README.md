@@ -1,31 +1,94 @@
 # Rakuten to Shopify CSV Converter
 
-A comprehensive solution that converts Rakuten product data to Shopify-ready CSV format, incorporating all production fixes and requirements discovered during real-world deployment.
+A comprehensive pipeline that transforms Rakuten product exports into Shopify-ready CSV files with all production fixes applied in a single processing run.
 
 ## Quick Start
 
+### Installation with uv (Recommended)
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install the project and dependencies
+uv sync
+
+# Run the converter
+uv run python convert.py data/rakuten_item.csv
+```
+
+### Alternative Installation with pip
+
+```bash
+pip install -e .
+# or
+pip install pandas beautifulsoup4 lxml pydantic tqdm click
+```
+
+### Basic Usage
+
+```bash
+# Auto-detect file in data/input/ (recommended)
+uv run python convert.py
+
+# Clean output mode - CSV in → CSV out (no verbose logs)
+uv run python convert.py --quiet
+
+# Specify input file explicitly
+uv run python convert.py data/rakuten_item.csv
+
+# With make commands
+make run-auto                              # Auto-detect
+make run-quiet                             # Clean output mode
+make run INPUT_FILE=data/rakuten_item.csv  # Specify file
+```
+
 ### Step 1: Prepare Your Data
 ```bash
-# Place your Rakuten files in data/input/
+# Place your Rakuten file in data/input/ (auto-detection will find it)
 cp your_rakuten_item.csv data/input/
-cp your_rakuten_collection.csv data/input/
-cp your_mapping_meta.json data/mappings/
 
-# Place tax master files in data/tax_master/
-cp 商品マスタ_20250912.csv data/tax_master/
+# Or place it anywhere and specify the path
+cp your_rakuten_item.csv data/
+
+# Optional: Custom mapping configuration
+cp your_mapping_meta.json data/
 ```
 
-### Step 2: Run Main Conversion
+### Auto-Detection Feature
+
+The converter automatically looks for input files in `data/input/` directory:
+
+1. **rakuten_item.csv** (exact match)
+2. ***rakuten_item*.csv** (pattern match)
+3. ***item*.csv** (broader pattern)
+4. ****.csv** (any CSV file, newest first)
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the main converter
-python src/main.py \
-  --input data/input/rakuten_item.csv \
-  --collection data/input/rakuten_collection.csv \
-  --output output/csv/shopify_products.csv
+# Just run without specifying a file!
+uv run python convert.py
+# Looking for input files in: /path/to/project/data/input
+# Auto-detected input file: /path/to/project/data/input/rakuten_item.csv
 ```
+
+### Output Modes
+
+**Clean Mode (Recommended):**
+```bash
+uv run python convert.py --quiet
+```
+- Shows only essential transformation steps
+- Clean "CSV in → CSV out" view
+- Perfect for production use
+- All detailed logs still saved to file
+
+**Verbose Mode (Default):**
+```bash
+uv run python convert.py
+```
+- Shows detailed step-by-step processing
+- Full logging to console and file
+- Useful for debugging and development
 
 ### Step 3: Check Results
 ```bash
