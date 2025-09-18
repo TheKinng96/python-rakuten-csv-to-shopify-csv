@@ -184,15 +184,15 @@ def auto_detect_input_file() -> str:
 def auto_detect_previous_output(step_number: str, output_dir: Path) -> str:
     """Auto-detect previous step CSV output"""
     prev_step = f"{int(step_number) - 1:02d}"
-    csv_file = output_dir / f"output_{prev_step}.csv"
-
-    if csv_file.exists():
-        return str(csv_file)
-
-    # Fallback to pickle file
+    # Prefer pickle file for full data structure
     pkl_file = output_dir / f"step_{prev_step}_output.pkl"
     if pkl_file.exists():
         return str(pkl_file)
+
+    # Fallback to CSV file
+    csv_file = output_dir / f"output_{prev_step}.csv"
+    if csv_file.exists():
+        return str(csv_file)
 
     raise FileNotFoundError(f"Previous step output not found: {csv_file} or {pkl_file}")
 
@@ -269,7 +269,7 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
 
     # Save CSV output if dataframe exists
     df_key = None
-    for key in ['final_df', 'cleaned_df', 'sku_processed_df', 'html_processed_df', 'raw_df']:
+    for key in ['final_df', 'shopify_df', 'cleaned_df', 'sku_processed_df', 'html_processed_df', 'raw_df']:
         if key in data and data[key] is not None:
             df_key = key
             break
