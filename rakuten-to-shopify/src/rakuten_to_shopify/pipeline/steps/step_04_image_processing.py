@@ -3,12 +3,16 @@ Step 04: Image Processing and URL Management
 
 Processes product images from Rakuten and generates proper Shopify image columns.
 Handles up to 20 images per product with position management and URL fixes.
+Also replaces HTML description image URLs with Shopify CDN URLs.
 """
 
 import logging
 import pandas as pd
 import re
 from typing import Dict, Any, List
+from bs4 import BeautifulSoup
+from pathlib import Path
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +38,17 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         'total_images_processed': 0,
         'gold_urls_fixed': 0,
         'cabinet_urls_processed': 0,
-        'empty_image_fields': 0
+        'empty_image_fields': 0,
+        'html_descriptions_with_images': 0,
+        'html_rakuten_urls_found': 0,
+        'html_urls_replaced': 0
     }
+
+    # Shopify CDN base URL for HTML image replacement
+    shopify_cdn_base = "https://cdn.shopify.com/s/files/1/0637/6059/7127/files/"
+
+    # Load failed downloads to skip replacement for missing images
+    failed_urls = load_failed_download_urls()
 
     # Create image columns (Image Src, Image Position, Image Alt Text)
     image_columns = []
@@ -62,13 +75,23 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             if col.startswith('Image'):
                 df.at[idx, col] = value
 
+    # Replace Rakuten URLs with Shopify CDN URLs in HTML descriptions
+    logger.info("Replacing Rakuten image URLs with Shopify CDN URLs in HTML descriptions...")
+    df['Body (HTML)'] = df['Body (HTML)'].apply(
+        lambda html: replace_html_image_urls(html, shopify_cdn_base, image_stats, failed_urls)
+    )
+
+    # Update the original data dict with our modified DataFrame
+    data['html_processed_df'] = df
+
     # Log image processing results
-    logger.info(f"Image processing completed")
+    logger.info(f"Image processing and URL replacement completed")
     for key, value in image_stats.items():
         logger.info(f"Image stats - {key}: {value}")
 
     return {
-        'image_processed_df': df,
+        'html_processed_df': df,  # Keep same key for step chaining
+        'image_processed_df': df,  # Also provide for backwards compatibility
         'image_stats': image_stats
     }
 
@@ -239,3 +262,128 @@ def create_variant_image_mapping(df: pd.DataFrame) -> Dict[str, str]:
             variant_images[sku] = main_image
 
     return variant_images
+
+
+def replace_html_image_urls(html_content: str, shopify_cdn_base: str, stats: Dict[str, Any], failed_urls: set = None) -> str:
+    """
+    Replace Rakuten image URLs with Shopify CDN URLs in HTML content
+
+    Args:
+        html_content: HTML content containing image URLs
+        shopify_cdn_base: Base URL for Shopify CDN
+        stats: Statistics tracking dictionary
+
+    Returns:
+        HTML content with replaced image URLs
+    """
+    if pd.isna(html_content) or not html_content.strip():
+        return html_content
+
+    try:
+        # Parse HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Find all img tags
+        img_tags = soup.find_all('img')
+
+        if img_tags:
+            stats['html_descriptions_with_images'] += 1
+
+        replacements_made = 0
+
+        for img in img_tags:
+            # Check both src and data-original-src attributes
+            for attr in ['src', 'data-original-src']:
+                url = img.get(attr)
+                if url and is_rakuten_url(url):
+                    stats['html_rakuten_urls_found'] += 1
+
+                    # Remove img tag if this URL failed to download
+                    if failed_urls and url in failed_urls:
+                        logger.debug(f"Removing img tag for failed download: {url}")
+                        img.decompose()  # Remove the entire img tag
+                        replacements_made += 1  # Count as a "replacement" (removal)
+                        break  # Exit the attr loop since img is removed
+
+                    # Extract filename from Rakuten URL
+                    filename = extract_filename_from_rakuten_url(url)
+                    if filename:
+                        # Create Shopify CDN URL
+                        shopify_url = f"{shopify_cdn_base}{filename}"
+
+                        # Add version parameter for cache busting
+                        shopify_url += "?v=1758179452"
+
+                        # Replace the URL
+                        img[attr] = shopify_url
+                        replacements_made += 1
+
+                        logger.debug(f"Replaced HTML image: {url} → {shopify_url}")
+
+        stats['html_urls_replaced'] += replacements_made
+
+        return str(soup)
+
+    except Exception as e:
+        logger.warning(f"Error replacing HTML image URLs: {e}")
+        return str(html_content)  # Return original if processing fails
+
+
+def is_rakuten_url(url: str) -> bool:
+    """Check if URL is a Rakuten image URL"""
+    if not url:
+        return False
+
+    return 'image.rakuten.co.jp' in url and 'tsutsu-uraura' in url
+
+
+def extract_filename_from_rakuten_url(url: str) -> str:
+    """
+    Extract filename from Rakuten URL
+
+    Examples:
+    https://image.rakuten.co.jp/tsutsu-uraura/cabinet/productpic/yufu.jpg → yufu.jpg
+    https://image.rakuten.co.jp/tsutsu-uraura/cabinet/gift_info/tanzaku/ochugen_seal010r.jpg → ochugen_seal010r.jpg
+    """
+    try:
+        parsed = urlparse(url)
+        path = parsed.path
+
+        if path:
+            # Extract filename from path
+            filename = Path(path).name
+
+            # Remove query parameters from filename if they got included
+            filename = filename.split('?')[0]
+
+            if filename and '.' in filename:
+                return filename
+
+        return None
+
+    except Exception as e:
+        logger.warning(f"Error extracting filename from URL {url}: {e}")
+        return None
+
+
+def load_failed_download_urls() -> set:
+    """
+    Load URLs that failed to download from the error log
+
+    Returns:
+        Set of URLs that failed to download
+    """
+    failed_urls = set()
+    error_file = Path("step_output/cleaned_html_images/download_errors.csv")
+
+    if error_file.exists():
+        try:
+            import pandas as pd
+            df_errors = pd.read_csv(error_file)
+            if 'url' in df_errors.columns:
+                failed_urls = set(df_errors['url'].dropna().tolist())
+                logger.info(f"Loaded {len(failed_urls)} failed download URLs to skip")
+        except Exception as e:
+            logger.warning(f"Error loading failed download URLs: {e}")
+
+    return failed_urls
