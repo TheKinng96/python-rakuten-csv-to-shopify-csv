@@ -269,15 +269,40 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
 
     # Save CSV output if dataframe exists
     df_key = None
-    for key in ['final_df', 'shopify_df', 'cleaned_df', 'sku_processed_df', 'html_processed_df', 'raw_df']:
+    available_keys = [k for k in data.keys() if k.endswith('_df') and data[k] is not None]
+    print(f"🔍 Available DataFrame keys: {available_keys}")
+
+    for key in ['final_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'cleaned_df', 'raw_df']:
         if key in data and data[key] is not None:
             df_key = key
+            print(f"📊 Selected DataFrame key: {df_key}")
             break
 
     if df_key:
         csv_file = output_dir / f"output_{step_number}.csv"
-        data[df_key].to_csv(csv_file, index=False, encoding='utf-8')
+        # CRITICAL: Force save the DataFrame and ensure changes are persisted
+        final_df = data[df_key]
+        final_df.to_csv(csv_file, index=False, encoding='utf-8')
         print(f"📄 CSV output saved: {csv_file}")
+
+        # Debug: Verify the DataFrame being saved has the changes
+        if step_number in ['03', '04']:
+            try:
+                # Check the DataFrame directly before saving
+                sample_data = final_df.head(5)
+                df_content = str(sample_data.to_string())
+                ec_up_count = df_content.count('EC-UP')
+                shopify_count = df_content.count('cdn.shopify.com')
+                print(f"📊 DataFrame verification (first 5 rows): EC-UP={ec_up_count}, Shopify={shopify_count}")
+
+                # Also check the saved file
+                test_df = pd.read_csv(csv_file, nrows=5)
+                file_content = str(test_df.to_string())
+                file_ec_up = file_content.count('EC-UP')
+                file_shopify = file_content.count('cdn.shopify.com')
+                print(f"📊 Saved file verification (first 5 rows): EC-UP={file_ec_up}, Shopify={file_shopify}")
+            except Exception as e:
+                print(f"Debug verification failed: {e}")
 
     print(f"💾 Step data saved: {pkl_file}")
 
@@ -307,6 +332,12 @@ def run_single_step(step_number: str, input_file: str, output_dir: Path, quiet: 
         result = step_func.execute(data)
 
         if result:
+            print(f"🔄 Step returned keys: {list(result.keys())}")
+            # Check if we're overriding processed data with unprocessed data
+            if 'html_processed_df' in result and 'html_processed_df' in data:
+                original_ec_up = str(data['html_processed_df'].head(2).to_string()).count('EC-UP')
+                returned_ec_up = str(result['html_processed_df'].head(2).to_string()).count('EC-UP')
+                print(f"🔍 Before update: original={original_ec_up}, returned={returned_ec_up}")
             data.update(result)
 
         # Save intermediate data for chaining

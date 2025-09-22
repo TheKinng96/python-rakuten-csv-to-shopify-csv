@@ -75,14 +75,73 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             if col.startswith('Image'):
                 df.at[idx, col] = value
 
-    # Replace Rakuten URLs with Shopify CDN URLs in HTML descriptions
+    # Replace Rakuten URLs with Shopify CDN URLs using proven working logic
     logger.info("Replacing Rakuten image URLs with Shopify CDN URLs in HTML descriptions...")
-    df['Body (HTML)'] = df['Body (HTML)'].apply(
-        lambda html: replace_html_image_urls(html, shopify_cdn_base, image_stats, failed_urls)
-    )
 
-    # Update the original data dict with our modified DataFrame
+    # Use the proven working approach from clean pipeline
+    def clean_and_replace_html(html_content):
+        """Clean EC-UP blocks and replace Rakuten URLs with Shopify CDN URLs"""
+        if pd.isna(html_content) or not html_content:
+            return html_content
+
+        import re
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        html_str = str(html_content)
+
+        # Step 1: Remove EC-UP blocks (proven working patterns)
+        ec_up_patterns = [
+            r'<!--EC-UP_[^>]*?START-->(.*?)<!--EC-UP_[^>]*?END-->',
+            r'<!--EC-UP_[^>]*?-->',
+            r'<style[^>]*?ecup[^>]*?>(.*?)</style>',
+            r'<div[^>]*?class="[^"]*ecup[^"]*"[^>]*?>(.*?)</div>',
+        ]
+
+        for pattern in ec_up_patterns:
+            html_str = re.sub(pattern, '', html_str, flags=re.DOTALL | re.IGNORECASE)
+
+        # Step 2: Replace Rakuten image URLs with Shopify CDN URLs
+        try:
+            soup = BeautifulSoup(html_str, 'html.parser')
+
+            for img in soup.find_all('img'):
+                for attr in ['src', 'data-original-src']:
+                    url = img.get(attr)
+                    if url and 'image.rakuten.co.jp' in url and 'tsutsu-uraura' in url:
+                        # Skip failed downloads - remove the img tag entirely
+                        if failed_urls and url in failed_urls:
+                            img.decompose()
+                            break
+
+                        # Extract filename and replace with Shopify CDN
+                        try:
+                            parsed = urlparse(url)
+                            filename = Path(parsed.path).name.split('?')[0]
+                            if filename and '.' in filename:
+                                shopify_url = f"{shopify_cdn_base}{filename}?v=1758179452"
+                                img[attr] = shopify_url
+                        except:
+                            pass
+
+            return str(soup)
+
+        except Exception as e:
+            logger.warning(f"Error in HTML processing: {e}")
+            return html_str
+
+    # Apply the combined cleaning and replacement
+    df['Body (HTML)'] = df['Body (HTML)'].apply(clean_and_replace_html)
+
+    # CRITICAL: Update the original data dict with our modified DataFrame
+    # This ensures the step runner saves the correct DataFrame to CSV
     data['html_processed_df'] = df
+
+    # Debug: Verify DataFrame changes before returning
+    sample_html = str(df['Body (HTML)'].head(2).to_string())
+    ec_up_count = sample_html.count('EC-UP')
+    shopify_count = sample_html.count('cdn.shopify.com')
+    logger.info(f"DEBUG: DataFrame before return has {ec_up_count} EC-UP, {shopify_count} Shopify CDN in first 2 rows")
 
     # Log image processing results
     logger.info(f"Image processing and URL replacement completed")
@@ -265,68 +324,47 @@ def create_variant_image_mapping(df: pd.DataFrame) -> Dict[str, str]:
 
 
 def replace_html_image_urls(html_content: str, shopify_cdn_base: str, stats: Dict[str, Any], failed_urls: set = None) -> str:
-    """
-    Replace Rakuten image URLs with Shopify CDN URLs in HTML content
-
-    Args:
-        html_content: HTML content containing image URLs
-        shopify_cdn_base: Base URL for Shopify CDN
-        stats: Statistics tracking dictionary
-
-    Returns:
-        HTML content with replaced image URLs
-    """
-    if pd.isna(html_content) or not html_content.strip():
+    """Replace Rakuten image URLs with Shopify CDN URLs using proven working logic"""
+    if pd.isna(html_content) or not html_content:
         return html_content
 
     try:
-        # Parse HTML
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(str(html_content), 'html.parser')
 
-        # Find all img tags
-        img_tags = soup.find_all('img')
-
-        if img_tags:
+        if soup.find_all('img'):
             stats['html_descriptions_with_images'] += 1
 
-        replacements_made = 0
+        replacements = 0
 
-        for img in img_tags:
-            # Check both src and data-original-src attributes
+        for img in soup.find_all('img'):
             for attr in ['src', 'data-original-src']:
                 url = img.get(attr)
-                if url and is_rakuten_url(url):
+                if url and 'image.rakuten.co.jp' in url and 'tsutsu-uraura' in url:
                     stats['html_rakuten_urls_found'] += 1
 
-                    # Remove img tag if this URL failed to download
+                    # Skip failed downloads - remove the img tag entirely
                     if failed_urls and url in failed_urls:
-                        logger.debug(f"Removing img tag for failed download: {url}")
-                        img.decompose()  # Remove the entire img tag
-                        replacements_made += 1  # Count as a "replacement" (removal)
-                        break  # Exit the attr loop since img is removed
+                        img.decompose()
+                        replacements += 1
+                        break
 
-                    # Extract filename from Rakuten URL
-                    filename = extract_filename_from_rakuten_url(url)
-                    if filename:
-                        # Create Shopify CDN URL
-                        shopify_url = f"{shopify_cdn_base}{filename}"
+                    # Extract filename and replace with Shopify CDN
+                    try:
+                        parsed = urlparse(url)
+                        filename = Path(parsed.path).name.split('?')[0]
+                        if filename and '.' in filename:
+                            shopify_url = f"{shopify_cdn_base}{filename}?v=1758179452"
+                            img[attr] = shopify_url
+                            replacements += 1
+                    except:
+                        pass
 
-                        # Add version parameter for cache busting
-                        shopify_url += "?v=1758179452"
-
-                        # Replace the URL
-                        img[attr] = shopify_url
-                        replacements_made += 1
-
-                        logger.debug(f"Replaced HTML image: {url} → {shopify_url}")
-
-        stats['html_urls_replaced'] += replacements_made
-
+        stats['html_urls_replaced'] += replacements
         return str(soup)
 
     except Exception as e:
         logger.warning(f"Error replacing HTML image URLs: {e}")
-        return str(html_content)  # Return original if processing fails
+        return str(html_content)
 
 
 def is_rakuten_url(url: str) -> bool:
