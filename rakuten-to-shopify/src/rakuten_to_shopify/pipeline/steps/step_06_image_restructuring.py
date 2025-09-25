@@ -41,20 +41,15 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     # Load and integrate cleaned image URLs from step 3
     df = integrate_cleaned_image_urls(df, config, image_stats)
 
-    # Remove incorrect Image Src 2-20, Image Alt Text 2-20, and Image Position 2-20 columns
-    image_columns_to_remove = []
-    for i in range(2, 21):  # Columns 2 through 20
-        for prefix in [f"Image Src {i}", f"Image Alt Text {i}", f"Image Position {i}"]:
-            cols_to_remove = [col for col in df.columns if col.startswith(prefix)]
-            image_columns_to_remove.extend(cols_to_remove)
-
-    if image_columns_to_remove:
-        logger.info(f"Removing {len(image_columns_to_remove)} incorrect image columns")
-        df = df.drop(columns=image_columns_to_remove)
-        image_stats['columns_removed'] = len(image_columns_to_remove)
+    # Note: Keep Image Src 2-20 columns for restructuring (these are now properly populated from step 02)
+    # Only remove any truly incorrect/duplicate columns if they exist
+    image_stats['columns_removed'] = 0
 
     # Restructure images to proper row-based format
     restructured_df = restructure_images_to_rows(df, image_stats)
+
+    # Remove extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20)
+    restructured_df = remove_extra_image_columns(restructured_df, image_stats)
 
     # Log image restructuring results
     logger.info(f"Image restructuring completed")
@@ -65,6 +60,45 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         'image_restructured_df': restructured_df,
         'image_stats': image_stats
     }
+
+
+def remove_extra_image_columns(df: pd.DataFrame, stats: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Remove extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20)
+
+    Args:
+        df: Dataframe to clean up
+        stats: Statistics tracking dictionary
+
+    Returns:
+        Dataframe with extra image columns removed
+    """
+    logger.info("Removing extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20)...")
+
+    columns_to_remove = []
+
+    # Find Image Src 2-20 columns
+    for i in range(2, 21):
+        img_src_col = f'Image Src {i}'
+        img_alt_col = f'Image Alt Text {i}'
+        img_pos_col = f'Image Position {i}'
+
+        if img_src_col in df.columns:
+            columns_to_remove.append(img_src_col)
+        if img_alt_col in df.columns:
+            columns_to_remove.append(img_alt_col)
+        if img_pos_col in df.columns:
+            columns_to_remove.append(img_pos_col)
+
+    if columns_to_remove:
+        logger.info(f"Removing {len(columns_to_remove)} extra image columns: {columns_to_remove[:5]}{'...' if len(columns_to_remove) > 5 else ''}")
+        df = df.drop(columns=columns_to_remove)
+        stats['columns_removed'] = len(columns_to_remove)
+    else:
+        logger.info("No extra image columns found to remove")
+        stats['columns_removed'] = 0
+
+    return df
 
 
 def restructure_images_to_rows(df: pd.DataFrame, stats: Dict[str, Any]) -> pd.DataFrame:
@@ -126,9 +160,16 @@ def restructure_product_images(group: pd.DataFrame, handle: str, stats: Dict[str
     for row in rows:
         # Check main Image Src
         if row.get('Image Src') and str(row['Image Src']).strip():
+            # Ensure position is an integer
+            position = row.get('Image Position', 1)
+            try:
+                position = int(position) if position else 1
+            except (ValueError, TypeError):
+                position = 1
+
             image_info = {
                 'src': row['Image Src'],
-                'position': row.get('Image Position', 1),
+                'position': position,
                 'alt': row.get('Image Alt Text', ''),
                 'is_main': True
             }
@@ -383,11 +424,20 @@ def integrate_cleaned_image_urls(df: pd.DataFrame, config: Any, stats: Dict[str,
             handle_mask = df['Handle'] == handle
             handle_rows = df.loc[handle_mask]
 
-            # Check if this handle already has an image
+            # Check if this handle already has any images
             has_image = False
             for idx, row in handle_rows.iterrows():
+                # Check main Image Src and any additional Image Src columns
                 if row.get('Image Src') and str(row['Image Src']).strip():
                     has_image = True
+                    break
+                # Also check Image Src 2-20 columns
+                for i in range(2, 21):
+                    img_col = f'Image Src {i}'
+                    if row.get(img_col) and str(row[img_col]).strip():
+                        has_image = True
+                        break
+                if has_image:
                     break
 
             # If no image, assign one from available images

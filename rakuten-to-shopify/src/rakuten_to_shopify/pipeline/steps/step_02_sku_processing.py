@@ -307,9 +307,62 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     shopify_df['Variant Requires Shipping'] = 'TRUE'
     shopify_df['Variant Taxable'] = 'TRUE'
     shopify_df['Variant Barcode'] = df['カタログID'].apply(format_number)
-    shopify_df['Image Src'] = df['商品画像パス1'].fillna('')  # Empty for additional variants
+    # Construct complete image URLs based on type
+    def construct_image_url(path, image_type):
+        if pd.isna(path) or not str(path).strip():
+            return ''
+
+        path_str = str(path).strip()
+        type_str = str(image_type).strip().upper() if pd.notna(image_type) else ''
+
+        if type_str == 'CABINET':
+            return f"https://tshop.r10s.jp/tsutsu-uraura/cabinet{path_str}"
+        elif type_str == 'GOLD':
+            return f"https://tshop.r10s.jp/gold/tsutsu-uraura{path_str.lstrip('/')}"
+        else:
+            # Fallback to basic domain + path
+            return f"https://tshop.r10s.jp/tsutsu-uraura{path_str.lstrip('/')}"
+
+    shopify_df['Image Src'] = df.apply(lambda row: construct_image_url(row.get('商品画像パス1'), row.get('商品画像タイプ1')), axis=1)
     shopify_df['Image Position'] = ''
     shopify_df['Image Alt Text'] = df['商品画像名（ALT）1'].fillna('')  # Empty for additional variants
+
+    # Create all additional image columns at once to avoid DataFrame fragmentation
+    additional_image_data = {}
+
+    # Map additional image columns (商品画像パス2-20 → Image Src 2-20) with complete URLs
+    for i in range(2, 21):
+        image_path_col = f'商品画像パス{i}'
+        image_type_col = f'商品画像タイプ{i}'
+        image_alt_col = f'商品画像名（ALT）{i}'
+        shopify_src_col = f'Image Src {i}'
+        shopify_pos_col = f'Image Position {i}'
+        shopify_alt_col = f'Image Alt Text {i}'
+
+        # Construct complete URLs for additional images
+        if image_path_col in df.columns and image_type_col in df.columns:
+            additional_image_data[shopify_src_col] = df.apply(
+                lambda row: construct_image_url(row.get(image_path_col), row.get(image_type_col)), axis=1
+            )
+        elif image_path_col in df.columns:
+            # Fallback if no type column
+            additional_image_data[shopify_src_col] = df.apply(
+                lambda row: construct_image_url(row.get(image_path_col), ''), axis=1
+            )
+        else:
+            additional_image_data[shopify_src_col] = ''
+
+        additional_image_data[shopify_pos_col] = ''
+
+        if image_alt_col in df.columns:
+            additional_image_data[shopify_alt_col] = df[image_alt_col].fillna('')
+        else:
+            additional_image_data[shopify_alt_col] = ''
+
+    # Add all image columns at once using pd.concat for better performance
+    if additional_image_data:
+        additional_image_df = pd.DataFrame(additional_image_data, index=shopify_df.index)
+        shopify_df = pd.concat([shopify_df, additional_image_df], axis=1)
     shopify_df['Gift Card'] = 'FALSE'
     shopify_df['SEO Title'] = ''
     shopify_df['SEO Description'] = ''

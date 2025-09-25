@@ -60,9 +60,10 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             f'Image Alt Text {i}' if i > 1 else 'Image Alt Text'
         ])
 
-    # Initialize image columns
+    # Initialize image columns (preserve existing values)
     for col in image_columns:
-        df[col] = ''
+        if col not in df.columns:
+            df[col] = ''
 
     # Process images for each row
     df_processed = df.apply(
@@ -171,8 +172,23 @@ def process_product_images(row: pd.Series, config, stats: Dict[str, Any]) -> Dic
     image_data = {}
     product_name = row.get('商品名', '')
 
-    # Extract images from various Rakuten fields
-    image_urls = extract_image_urls(row, config)
+    # Extract images from existing Image Src columns and Rakuten fields
+    image_urls = []
+
+    # Collect existing complete Image Src URLs (already constructed in step 02)
+    for i in range(1, config.max_images_per_product + 1):
+        src_col = 'Image Src' if i == 1 else f'Image Src {i}'
+
+        if src_col in row and row[src_col] and str(row[src_col]).strip():
+            complete_url = str(row[src_col]).strip()
+            if complete_url not in image_urls:
+                image_urls.append(complete_url)
+
+    # Then, extract from any remaining Rakuten fields (fallback)
+    rakuten_urls = extract_image_urls(row, config)
+    for url in rakuten_urls:
+        if url not in image_urls:
+            image_urls.append(url)
 
     if image_urls:
         stats['products_with_images'] += 1
@@ -181,17 +197,21 @@ def process_product_images(row: pd.Series, config, stats: Dict[str, Any]) -> Dic
         for i, url in enumerate(image_urls[:config.max_images_per_product], 1):
             stats['total_images_processed'] += 1
 
-            # Fix image URL
-            fixed_url = fix_image_url(url, config, stats)
-
-            # Set image data
+            # Set image data - URLs and alt text are already correct from step 02
             src_col = 'Image Src' if i == 1 else f'Image Src {i}'
             pos_col = 'Image Position' if i == 1 else f'Image Position {i}'
             alt_col = 'Image Alt Text' if i == 1 else f'Image Alt Text {i}'
 
-            image_data[src_col] = fixed_url
+            # Preserve the already-correct URL and alt text from step 02
+            image_data[src_col] = url
             image_data[pos_col] = str(i)
-            image_data[alt_col] = f"{product_name} - 画像{i}"
+
+            # Keep original alt text from step 02 (商品画像名)
+            if alt_col in row and row[alt_col] and str(row[alt_col]).strip():
+                image_data[alt_col] = str(row[alt_col]).strip()
+            else:
+                # Fallback only if no alt text was set in step 02
+                image_data[alt_col] = f"{product_name} - 画像{i}"
 
     else:
         stats['empty_image_fields'] += 1
@@ -214,26 +234,26 @@ def extract_image_urls(row: pd.Series, config) -> List[str]:
 
     # Image fields to check (in order of priority)
     image_fields = [
-        '商品画像URL',
-        '商品画像URL2',
-        '商品画像URL3',
-        '商品画像URL4',
-        '商品画像URL5',
-        '商品画像URL6',
-        '商品画像URL7',
-        '商品画像URL8',
-        '商品画像URL9',
-        '商品画像URL10',
-        '商品画像URL11',
-        '商品画像URL12',
-        '商品画像URL13',
-        '商品画像URL14',
-        '商品画像URL15',
-        '商品画像URL16',
-        '商品画像URL17',
-        '商品画像URL18',
-        '商品画像URL19',
-        '商品画像URL20'
+        '商品画像パス1',
+        '商品画像パス2',
+        '商品画像パス3',
+        '商品画像パス4',
+        '商品画像パス5',
+        '商品画像パス6',
+        '商品画像パス7',
+        '商品画像パス8',
+        '商品画像パス9',
+        '商品画像パス10',
+        '商品画像パス11',
+        '商品画像パス12',
+        '商品画像パス13',
+        '商品画像パス14',
+        '商品画像パス15',
+        '商品画像パス16',
+        '商品画像パス17',
+        '商品画像パス18',
+        '商品画像パス19',
+        '商品画像パス20'
     ]
 
     # Extract URLs from available fields
