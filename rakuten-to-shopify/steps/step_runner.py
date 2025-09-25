@@ -28,7 +28,7 @@ from rakuten_to_shopify.pipeline.steps import (
     step_03_html_processing,
     step_04_image_processing,
     step_05_metafield_mapping,
-    step_06_tax_classification,
+    step_06_image_restructuring,
     step_07_type_assignment,
     step_08_variant_grouping,
     step_09_attribute_processing,
@@ -36,7 +36,8 @@ from rakuten_to_shopify.pipeline.steps import (
     step_11_csv_formatting,
     step_12_header_completion,
     step_13_quality_validation,
-    step_14_export_generation
+    step_14_export_generation,
+    step_15_tax_classification
 )
 
 
@@ -47,7 +48,7 @@ STEPS = {
     '03': ('HTML Processing', step_03_html_processing),
     '04': ('Image Processing', step_04_image_processing),
     '05': ('Metafield Mapping', step_05_metafield_mapping),
-    '06': ('Tax Classification', step_06_tax_classification),
+    '06': ('Image Restructuring', step_06_image_restructuring),
     '07': ('Type Assignment', step_07_type_assignment),
     '08': ('Variant Grouping', step_08_variant_grouping),
     '09': ('Attribute Processing', step_09_attribute_processing),
@@ -55,7 +56,8 @@ STEPS = {
     '11': ('CSV Formatting', step_11_csv_formatting),
     '12': ('Header Completion', step_12_header_completion),
     '13': ('Quality Validation', step_13_quality_validation),
-    '14': ('Export Generation', step_14_export_generation)
+    '14': ('Export Generation', step_14_export_generation),
+    '15': ('Tax Classification', step_15_tax_classification)
 }
 
 
@@ -84,7 +86,7 @@ Step Data Flow:
     parser.add_argument(
         'step_number',
         nargs='?',
-        help='Step number to run (00-14)'
+        help='Step number to run (00-15)'
     )
 
     parser.add_argument(
@@ -139,7 +141,7 @@ def list_steps():
         print(f"  {step_num}: {step_name}")
 
     print("\n🔄 Data Flow:")
-    print("  CSV → 00 → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12 → 13 → 14 → CSV")
+    print("  CSV → 00 → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10 → 11 → 12 → 13 → 14 → 15 → CSV")
 
     print("\n💡 Examples:")
     print("  python steps/step_runner.py 00               # Auto-detect input file")
@@ -272,7 +274,7 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
     available_keys = [k for k in data.keys() if k.endswith('_df') and data[k] is not None]
     print(f"🔍 Available DataFrame keys: {available_keys}")
 
-    for key in ['final_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'cleaned_df', 'raw_df']:
+    for key in ['final_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'cleaned_df', 'raw_df']:
         if key in data and data[key] is not None:
             df_key = key
             print(f"📊 Selected DataFrame key: {df_key}")

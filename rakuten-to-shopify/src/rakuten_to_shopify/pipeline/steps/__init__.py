@@ -12,7 +12,7 @@ from . import (
     step_03_html_processing,
     step_04_image_processing,
     step_05_metafield_mapping,
-    step_06_tax_classification,
+    step_06_image_restructuring,
     step_07_type_assignment,
     step_08_variant_grouping,
     step_09_attribute_processing,
@@ -20,7 +20,8 @@ from . import (
     step_11_csv_formatting,
     step_12_header_completion,
     step_13_quality_validation,
-    step_14_export_generation
+    step_14_export_generation,
+    step_15_tax_classification
 )
 
 __all__ = [
@@ -30,7 +31,7 @@ __all__ = [
     'step_03_html_processing',
     'step_04_image_processing',
     'step_05_metafield_mapping',
-    'step_06_tax_classification',
+    'step_06_image_restructuring',
     'step_07_type_assignment',
     'step_08_variant_grouping',
     'step_09_attribute_processing',
@@ -38,5 +39,6 @@ __all__ = [
     'step_11_csv_formatting',
     'step_12_header_completion',
     'step_13_quality_validation',
-    'step_14_export_generation'
+    'step_14_export_generation',
+    'step_15_tax_classification'
 ]

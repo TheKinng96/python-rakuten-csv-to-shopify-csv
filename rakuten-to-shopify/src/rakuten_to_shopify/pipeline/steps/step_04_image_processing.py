@@ -29,7 +29,8 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     logger.info("Processing product images...")
 
-    df = data['html_processed_df'].copy()
+    # Get the most recent processed dataframe with all columns preserved
+    df = data.get('html_processed_df', data['shopify_df']).copy()
     config = data['config']
 
     # Track image processing statistics

@@ -59,8 +59,32 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             if handle in ['maruzen-4set00', 'abshiri-r330-t']:
                 logger.info(f"  {handle}: Using combined logic (should reduce rows from {len(group)} to {len(variant_info)})")
 
-            # Take product info from product row
+            # Take product info from product row, preserving ALL columns including 商品属性
             base_row = product_info.iloc[0].copy()
+
+            # Efficiently merge attribute data from all rows in the group to preserve 商品属性
+            attribute_columns = [col for col in group.columns if '商品属性' in col]
+            if attribute_columns:
+                # Count rows with actual non-empty attribute values (not just non-null)
+                attr_counts = group[attribute_columns].apply(
+                    lambda row: row.astype(str).str.strip().ne('').sum(), axis=1
+                )
+
+                # Find row with most actual attribute data
+                if attr_counts.max() > 0:
+                    best_attr_row_idx = attr_counts.idxmax()
+
+                    # Debug logging for problematic handles
+                    if handle in ['abshiri-r330-t']:
+                        logger.info(f"  {handle}: Attribute debug - best_attr_row has {attr_counts[best_attr_row_idx]} real attrs")
+                        sample_attr = group.loc[best_attr_row_idx, '商品属性（項目）1']
+                        logger.info(f"  {handle}: Sample attr value: '{sample_attr}'")
+
+                    # Copy attribute data from the row with most real attributes
+                    for attr_col in attribute_columns:
+                        attr_value = group.loc[best_attr_row_idx, attr_col]
+                        if pd.notna(attr_value) and str(attr_value).strip() != '':
+                            base_row[attr_col] = attr_value
 
             # For Shopify format: first row has product info + first variant
             # Subsequent rows have empty product fields + additional variants
@@ -97,6 +121,21 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             if handle in ['maruzen-4set00', 'abshiri-r330-t']:
                 logger.info(f"  {handle}: Using product-only logic")
             result_row = product_info.iloc[0].copy()
+
+            # Efficiently merge attribute data from all rows for product-only case
+            attribute_columns = [col for col in group.columns if '商品属性' in col]
+            if attribute_columns:
+                # Count actual non-empty values, not just non-null
+                attr_counts = group[attribute_columns].apply(
+                    lambda row: row.astype(str).str.strip().ne('').sum(), axis=1
+                )
+                if attr_counts.max() > 0:
+                    best_attr_row_idx = attr_counts.idxmax()
+                    for attr_col in attribute_columns:
+                        attr_value = group.loc[best_attr_row_idx, attr_col]
+                        if pd.notna(attr_value) and str(attr_value).strip() != '':
+                            result_row[attr_col] = attr_value
+
             if pd.isna(result_row['SKU管理番号']):
                 result_row['SKU管理番号'] = result_row['商品番号']
             yield result_row
@@ -169,12 +208,21 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         axis=1
     )
 
-    # Filter out SS variants (remove -ss products)
+    # Filter out SS variants (remove -ss products by both SKU and Handle)
     initial_count = len(df)
+
+    # Remove rows where SKU ends with -ss
     df = df[df['Variant Type'] != 'ss_variant']
-    ss_filtered = initial_count - len(df)
-    if ss_filtered > 0:
-        logger.info(f"Filtered out {ss_filtered} SS variants (-ss products)")
+    sku_ss_filtered = initial_count - len(df)
+
+    # Also remove rows where Handle contains -ss (商品管理番号 has -ss)
+    before_handle_filter = len(df)
+    df = df[~df['Handle'].str.contains('-ss', na=False)]
+    handle_ss_filtered = before_handle_filter - len(df)
+
+    total_ss_filtered = sku_ss_filtered + handle_ss_filtered
+    if total_ss_filtered > 0:
+        logger.info(f"Filtered out {total_ss_filtered} SS variants (-ss products): {sku_ss_filtered} by SKU, {handle_ss_filtered} by Handle")
 
     # Sort by handle and variant position to group products properly
     df = df.sort_values(['Handle', 'Variant Position']).reset_index(drop=True)
@@ -214,6 +262,10 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Converting to Shopify CSV format...")
 
     shopify_df = pd.DataFrame()
+
+    # First, preserve all 商品属性 columns for later metafield mapping
+    attribute_columns = [col for col in df.columns if '商品属性' in col]
+    logger.info(f"Preserving {len(attribute_columns)} attribute columns for metafield mapping")
 
     # Helper function to format numbers without decimals
     def format_number(value):
@@ -280,6 +332,12 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     shopify_df['Cost per item'] = ''
     shopify_df['Status'] = 'active'
 
+    # Preserve attribute columns for metafield mapping in step 05
+    # Use pd.concat for better performance when adding many columns
+    if attribute_columns:
+        attribute_df = df[attribute_columns].copy()
+        shopify_df = pd.concat([shopify_df, attribute_df], axis=1)
+
     # Statistics
     total_products = len(shopify_df['Handle'].unique())
     total_variants = len(shopify_df)
@@ -296,7 +354,7 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         'main_products': main_products,
         'set_variants': set_variants,
         'trial_variants': trial_variants,
-        'ss_variants_filtered': ss_filtered,
+        'ss_variants_filtered': total_ss_filtered,
         'products_with_sets': products_with_sets
     }
 

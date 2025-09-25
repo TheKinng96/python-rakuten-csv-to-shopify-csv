@@ -24,7 +24,7 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     logger.info("Assigning product types...")
 
-    df = data['tax_classified_df'].copy()
+    df = data['image_restructured_df'].copy()
     config = data['config']
 
     # Track type assignment statistics

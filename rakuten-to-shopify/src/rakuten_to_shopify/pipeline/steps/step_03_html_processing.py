@@ -27,7 +27,7 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Processing and cleaning HTML descriptions...")
 
     # Work directly on the existing DataFrame to ensure changes persist
-    df = data['shopify_df']
+    df = data['shopify_df'].copy()
     config = data['config']
 
     # Track HTML processing statistics
