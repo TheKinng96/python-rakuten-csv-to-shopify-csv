@@ -14,6 +14,7 @@ import sys
 import argparse
 import json
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -29,15 +30,8 @@ from rakuten_to_shopify.pipeline.steps import (
     step_04_image_processing,
     step_05_metafield_mapping,
     step_06_image_restructuring,
-    step_07_type_assignment,
-    step_08_variant_grouping,
-    step_09_attribute_processing,
-    step_10_description_finalization,
-    step_11_csv_formatting,
-    step_12_header_completion,
-    step_13_quality_validation,
-    step_14_export_generation,
-    step_15_tax_classification
+    step_07_tax_mapping,
+    step_08_data_cleanup
 )
 
 
@@ -49,15 +43,8 @@ STEPS = {
     '04': ('Image Processing', step_04_image_processing),
     '05': ('Metafield Mapping', step_05_metafield_mapping),
     '06': ('Image Restructuring', step_06_image_restructuring),
-    '07': ('Type Assignment', step_07_type_assignment),
-    '08': ('Variant Grouping', step_08_variant_grouping),
-    '09': ('Attribute Processing', step_09_attribute_processing),
-    '10': ('Description Finalization', step_10_description_finalization),
-    '11': ('CSV Formatting', step_11_csv_formatting),
-    '12': ('Header Completion', step_12_header_completion),
-    '13': ('Quality Validation', step_13_quality_validation),
-    '14': ('Export Generation', step_14_export_generation),
-    '15': ('Tax Classification', step_15_tax_classification)
+    '07': ('Tax Mapping', step_07_tax_mapping),
+    '08': ('Data Cleanup', step_08_data_cleanup)
 }
 
 
@@ -222,11 +209,20 @@ def load_step_data(step_number: str, input_file: str, output_dir: Path) -> dict:
             # Load CSV output from previous step
             import pandas as pd
             df = pd.read_csv(input_file, encoding='utf-8')
-            return {
-                'raw_df': df,
-                'output_dir': output_dir,
-                'config': PipelineConfig()
-            }
+            # For step 02, provide as cleaned_df (output from step 01)
+            # For other steps, use appropriate key based on step
+            if step_number == '02':
+                return {
+                    'cleaned_df': df,
+                    'output_dir': output_dir,
+                    'config': PipelineConfig()
+                }
+            else:
+                return {
+                    'raw_df': df,
+                    'output_dir': output_dir,
+                    'config': PipelineConfig()
+                }
         elif input_file.endswith('.pkl'):
             # Load pickle data
             import pickle
@@ -274,7 +270,21 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
     available_keys = [k for k in data.keys() if k.endswith('_df') and data[k] is not None]
     print(f"🔍 Available DataFrame keys: {available_keys}")
 
-    for key in ['final_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'cleaned_df', 'raw_df']:
+    # Determine priority based on step number
+    if step_number == '02':
+        # Step 2 (SKU processing) should prioritize shopify_df
+        priority_keys = ['final_df', 'shopify_df', 'sku_processed_df', 'cleaned_df', 'raw_df']
+    elif step_number == '07':
+        # Step 7 (tax mapping) should prioritize tax_mapped_df
+        priority_keys = ['final_df', 'tax_mapped_df', 'cleaned_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']
+    elif step_number == '08':
+        # Step 8 (data cleanup) should prioritize tax_mapped_df to preserve tax data
+        priority_keys = ['final_df', 'tax_mapped_df', 'cleaned_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']
+    else:
+        # Default priority
+        priority_keys = ['final_df', 'image_restructured_df', 'tax_mapped_df', 'cleaned_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']
+
+    for key in priority_keys:
         if key in data and data[key] is not None:
             df_key = key
             print(f"📊 Selected DataFrame key: {df_key}")
@@ -284,8 +294,25 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
         csv_file = output_dir / f"output_{step_number}.csv"
         # CRITICAL: Force save the DataFrame and ensure changes are persisted
         final_df = data[df_key]
+
+        # Special handling for step 8 to preserve Option1 Value string formatting
+        if step_number == '08' and 'Option1 Value' in final_df.columns:
+            # Convert Option1 Value to string to preserve natural number formatting
+            final_df['Option1 Value'] = final_df['Option1 Value'].astype(str)
+
+        # Replace NaN values with empty strings to avoid 'nan' in CSV output
+        final_df = final_df.fillna('')
+
+        # For step 8, ensure Option1 Value empty strings don't become 'nan'
+        if step_number == '08' and 'Option1 Value' in final_df.columns:
+            final_df.loc[final_df['Option1 Value'] == 'nan', 'Option1 Value'] = ''
+
         final_df.to_csv(csv_file, index=False, encoding='utf-8')
         print(f"📄 CSV output saved: {csv_file}")
+
+        # Special post-processing for step 8 to fix Option1 Value formatting in the saved file
+        if step_number == '08':
+            fix_option1_value_in_csv(csv_file)
 
         # Debug: Verify the DataFrame being saved has the changes
         if step_number in ['03', '04']:
@@ -428,6 +455,50 @@ def main():
     except Exception as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def fix_option1_value_in_csv(csv_file: Path):
+    """Post-process CSV file to convert decimal Option1 Values to natural numbers"""
+    try:
+        import pandas as pd
+
+        # Read CSV with Option1 Value as string to preserve original format
+        dtype_dict = {'Option1 Value': str}
+        df = pd.read_csv(csv_file, dtype=dtype_dict, low_memory=False)
+        if 'Option1 Value' not in df.columns:
+            return
+
+        # Function to format a single Option1 Value
+        def format_option1_value(value):
+            if pd.isna(value) or str(value).strip() == '' or str(value).lower() == 'nan':
+                return ''
+            try:
+                # Try to convert to float and then to int if it's a whole number
+                float_val = float(value)
+                if float_val.is_integer():
+                    return str(int(float_val))  # Return as string to preserve formatting
+                else:
+                    return str(value)  # Keep non-integer decimals as is
+            except (ValueError, TypeError):
+                # If conversion fails, keep original value
+                return str(value)
+
+        # Apply formatting to Option1 Value column
+        original_values = df['Option1 Value'].copy()
+        df['Option1 Value'] = df['Option1 Value'].apply(format_option1_value)
+
+        # Check if any changes were made
+        changes_made = sum(df['Option1 Value'] != original_values)
+
+        if changes_made > 0:
+            # Save the modified DataFrame back to CSV
+            df.to_csv(csv_file, index=False, encoding='utf-8')
+            print(f"📝 Fixed Option1 Value formatting in {csv_file} ({changes_made} values changed)")
+        else:
+            print(f"📝 No Option1 Value formatting changes needed in {csv_file}")
+
+    except Exception as e:
+        print(f"⚠️  Warning: Could not fix Option1 Value formatting: {e}")
 
 
 if __name__ == '__main__':

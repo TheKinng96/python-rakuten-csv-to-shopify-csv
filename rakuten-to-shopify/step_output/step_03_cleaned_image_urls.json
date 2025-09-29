@@ -3,7 +3,7 @@
   "source": "HTML descriptions after EC-UP removal and cleaning (Step 03)",
   "note": "These URLs are extracted from cleaned HTML - EC-UP promotional blocks removed",
   "stats": {
-    "total_descriptions": 917,
+    "total_descriptions": 676,
     "descriptions_with_images": 239,
     "unique_image_urls": 239
   },

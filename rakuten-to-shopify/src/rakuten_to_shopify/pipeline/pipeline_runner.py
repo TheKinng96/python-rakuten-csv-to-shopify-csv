@@ -22,15 +22,8 @@ from .steps import (
     step_04_image_processing,
     step_05_metafield_mapping,
     step_06_image_restructuring,
-    step_07_type_assignment,
-    step_08_variant_grouping,
-    step_09_attribute_processing,
-    step_10_description_finalization,
-    step_11_csv_formatting,
-    step_12_header_completion,
-    step_13_quality_validation,
-    step_14_export_generation,
-    step_15_tax_classification
+    step_07_tax_mapping,
+    step_08_data_cleanup
 )
 
 
@@ -94,15 +87,8 @@ class PipelineRunner:
                 ("04", "Image Processing", step_04_image_processing),
                 ("05", "Metafield Mapping", step_05_metafield_mapping),
                 ("06", "Image Restructuring", step_06_image_restructuring),
-                ("07", "Type Assignment", step_07_type_assignment),
-                ("08", "Variant Grouping", step_08_variant_grouping),
-                ("09", "Attribute Processing", step_09_attribute_processing),
-                ("10", "Description Finalization", step_10_description_finalization),
-                ("11", "CSV Formatting", step_11_csv_formatting),
-                ("12", "Header Completion", step_12_header_completion),
-                ("13", "Quality Validation", step_13_quality_validation),
-                ("14", "Export Generation", step_14_export_generation),
-                ("15", "Tax Classification", step_15_tax_classification)
+                ("07", "Tax Mapping", step_07_tax_mapping),
+                ("08", "Data Cleanup", step_08_data_cleanup)
             ]
 
             for step_num, step_name, step_func in steps:

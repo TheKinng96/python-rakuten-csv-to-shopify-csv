@@ -28,13 +28,17 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     df = data['cleaned_df'].copy()
     config = data['config']
 
+    # First, derive handles for all rows BEFORE consolidation
+    logger.info("Deriving handles from raw SKUs...")
+    df['Derived_Handle'] = df['商品管理番号（商品URL）'].apply(config.derive_handle)
+
     # Merge product and variant data structure
     logger.info("Consolidating product and variant data...")
 
-    # Group by 商品管理番号（商品URL） and combine product/variant info
+    # Group by DERIVED handle and combine product/variant info
     def consolidate_group(group):
-        """Consolidate product and variant info for each handle"""
-        handle = group['商品管理番号（商品URL）'].iloc[0]
+        """Consolidate product and variant info for each derived handle"""
+        derived_handle = group['Derived_Handle'].iloc[0]
 
         # Get product info (from rows with 商品名)
         product_info = group[group['商品名'].notna() & (group['商品名'] != '')]
@@ -42,22 +46,23 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         variant_info = group[group['SKU管理番号'].notna() & (group['SKU管理番号'] != '')]
 
         # Debug logging for problematic products
-        if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-            logger.info(f"  {handle}: product_rows={len(product_info)}, variant_rows={len(variant_info)}")
-            logger.info(f"  {handle}: total_input_rows={len(group)}")
+        if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+            logger.info(f"  {derived_handle}: product_rows={len(product_info)}, variant_rows={len(variant_info)}")
+            logger.info(f"  {derived_handle}: total_input_rows={len(group)}")
             # Show sample data
-            logger.info(f"  {handle}: product_info has 商品名: {list(product_info['商品名'].values) if len(product_info) > 0 else 'None'}")
-            logger.info(f"  {handle}: variant_info has SKU管理番号: {list(variant_info['SKU管理番号'].values) if len(variant_info) > 0 else 'None'}")
+            logger.info(f"  {derived_handle}: product_info has 商品名: {list(product_info['商品名'].values) if len(product_info) > 0 else 'None'}")
+            logger.info(f"  {derived_handle}: variant_info has SKU管理番号: {list(variant_info['SKU管理番号'].values) if len(variant_info) > 0 else 'None'}")
+            logger.info(f"  {derived_handle}: original handles: {list(group['商品管理番号（商品URL）'].unique())}")
 
         if len(product_info) == 0 and len(variant_info) == 0:
-            if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-                logger.info(f"  {handle}: No valid product or variant data - skipping")
+            if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+                logger.info(f"  {derived_handle}: No valid product or variant data - skipping")
             return
 
         # If we have both product and variant info, combine them
         if len(product_info) > 0 and len(variant_info) > 0:
-            if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-                logger.info(f"  {handle}: Using combined logic (should reduce rows from {len(group)} to {len(variant_info)})")
+            if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+                logger.info(f"  {derived_handle}: Using combined logic (should reduce rows from {len(group)} to {len(variant_info)})")
 
             # Take product info from product row, preserving ALL columns including 商品属性
             base_row = product_info.iloc[0].copy()
@@ -75,10 +80,10 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
                     best_attr_row_idx = attr_counts.idxmax()
 
                     # Debug logging for problematic handles
-                    if handle in ['abshiri-r330-t']:
-                        logger.info(f"  {handle}: Attribute debug - best_attr_row has {attr_counts[best_attr_row_idx]} real attrs")
+                    if derived_handle in ['abshiri-r330-t', 'alishan-mu1000']:
+                        logger.info(f"  {derived_handle}: Attribute debug - best_attr_row has {attr_counts[best_attr_row_idx]} real attrs")
                         sample_attr = group.loc[best_attr_row_idx, '商品属性（項目）1']
-                        logger.info(f"  {handle}: Sample attr value: '{sample_attr}'")
+                        logger.info(f"  {derived_handle}: Sample attr value: '{sample_attr}'")
 
                     # Copy attribute data from the row with most real attributes
                     for attr_col in attribute_columns:
@@ -86,40 +91,111 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
                         if pd.notna(attr_value) and str(attr_value).strip() != '':
                             base_row[attr_col] = attr_value
 
-            # For Shopify format: first row has product info + first variant
-            # Subsequent rows have empty product fields + additional variants
+            # Also merge SKU image data from all rows in the group
+            sku_image_columns = [col for col in group.columns if 'SKU画像' in col]
+            if sku_image_columns:
+                # Find first row with actual SKU image data
+                for _, row in group.iterrows():
+                    if pd.notna(row.get('SKU画像パス')) and str(row.get('SKU画像パス')).strip():
+                        for sku_col in sku_image_columns:
+                            sku_value = row.get(sku_col)
+                            if pd.notna(sku_value) and str(sku_value).strip():
+                                base_row[sku_col] = sku_value
+                        break
+
+            # For Shopify format: create one row per product+variant combination
+            # Match each variant row with its corresponding product row
             variant_count = 0
+
+            # Create a mapping of original handles to product rows for this derived handle
+            product_handle_map = {}
+            for _, prod_row in product_info.iterrows():
+                original_handle = prod_row['商品管理番号（商品URL）']
+                product_handle_map[original_handle] = prod_row
+
+            # Determine which field to use for Variant SKU based on data patterns
+            variant_handles = [row['商品管理番号（商品URL）'] for _, row in variant_info.iterrows()]
+            variant_skus = [row['SKU管理番号'] for _, row in variant_info.iterrows()]
+
+            # Case 1: If 商品管理番号 are unique (have different suffixes), use them
+            unique_handles = len(set(variant_handles)) > 1
+
+            # Case 2: If 商品管理番号 are the same, check if SKU管理番号 are different (indicating variants)
+            sku_has_variants = False
+            has_test_skus = False
+
+            if not unique_handles:
+                # Clean up the SKU list (remove nan and test values)
+                valid_skus = [str(sku) for sku in variant_skus if pd.notna(sku) and str(sku) != 'test' and str(sku) != 'nan']
+
+                # Check if we have multiple different valid SKUs (indicating variants)
+                if len(set(valid_skus)) > 1:
+                    sku_has_variants = True
+
+                # Also check for test values
+                for sku in variant_skus:
+                    sku_str = str(sku)
+                    if sku_str == 'test':
+                        has_test_skus = True
+
+            # Report products with test SKUs for investigation
+            if has_test_skus:
+                logger.warning(f"Product {derived_handle} has 'test' SKUs - using 商品管理番号 instead")
+
             for i, (_, variant_row) in enumerate(variant_info.iterrows()):
-                if i == 0:
-                    # First variant: keep all product info + add variant data
-                    result_row = base_row.copy()
-                else:
-                    # Additional variants: empty product fields + variant data
-                    result_row = base_row.copy()
-                    # Clear product-specific fields for additional variants
-                    result_row['商品名'] = ''
-                    result_row['PC用商品説明文'] = ''
-                    result_row['キャッチコピー'] = ''
-                    result_row['商品画像パス1'] = ''
-                    result_row['商品画像名（ALT）1'] = ''
+                # Find the corresponding product row by matching original handle
+                variant_original_handle = variant_row['商品管理番号（商品URL）']
+                corresponding_product_row = product_handle_map.get(variant_original_handle)
 
-                # Add variant data to all rows
-                result_row['SKU管理番号'] = variant_row['SKU管理番号']
-                result_row['通常購入販売価格'] = variant_row['通常購入販売価格']
-                result_row['在庫数'] = variant_row['在庫数']
-                result_row['カタログID'] = variant_row['カタログID']
-                result_row['SKU画像パス'] = variant_row.get('SKU画像パス', '')
-                result_row['SKU画像名（ALT）'] = variant_row.get('SKU画像名（ALT）', '')
-                variant_count += 1
-                yield result_row
+                if corresponding_product_row is not None:
+                    if i == 0:
+                        # First variant: keep all product info + add variant data
+                        result_row = base_row.copy()
+                        # Use base product data (not individual variant's product data) for shared product info
+                        # base_row already contains the common product title - no need to override
+                        if derived_handle in ['alishan-mu1000']:
+                            logger.info(f"  {derived_handle}: First variant (i=0) title: '{result_row['商品名']}'")
+                    else:
+                        # Additional variants: empty product fields + variant data
+                        result_row = base_row.copy()
+                        # Clear all product fields for additional variants (Shopify format)
+                        result_row['商品名'] = ''
+                        result_row['PC用商品説明文'] = ''
+                        result_row['キャッチコピー'] = ''
+                        result_row['商品画像パス1'] = ''
+                        result_row['商品画像名（ALT）1'] = ''
+                        if derived_handle in ['alishan-mu1000']:
+                            logger.info(f"  {derived_handle}: Additional variant (i={i}) title cleared to empty")
 
-            if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-                logger.info(f"  {handle}: Combined logic yielded {variant_count} rows")
+                    # Apply sophisticated SKU logic based on data patterns
+                    if unique_handles:
+                        # Case 1: 商品管理番号 are unique (have suffixes) - use them
+                        result_row['SKU管理番号'] = variant_original_handle
+                    elif sku_has_variants and str(variant_row['SKU管理番号']) != 'test':
+                        # Case 2: SKU管理番号 are different (variants) and current one is not "test" - use it
+                        result_row['SKU管理番号'] = variant_row['SKU管理番号']
+                    else:
+                        # Case 3: Fall back to 商品管理番号 (includes "test" cases)
+                        result_row['SKU管理番号'] = variant_original_handle
+                    result_row['通常購入販売価格'] = variant_row['通常購入販売価格']
+                    result_row['在庫数'] = variant_row['在庫数']
+                    result_row['カタログID'] = variant_row['カタログID']
+                    result_row['SKU画像パス'] = variant_row.get('SKU画像パス', '')
+                    result_row['SKU画像名（ALT）'] = variant_row.get('SKU画像名（ALT）', '')
+
+                    # Override with derived handle for grouping
+                    result_row['商品管理番号（商品URL）'] = derived_handle
+
+                    variant_count += 1
+                    yield result_row
+
+            if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+                logger.info(f"  {derived_handle}: Combined logic yielded {variant_count} rows")
 
         # If only product info (no variants), create with product SKU
         elif len(product_info) > 0:
-            if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-                logger.info(f"  {handle}: Using product-only logic")
+            if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+                logger.info(f"  {derived_handle}: Using product-only logic")
             result_row = product_info.iloc[0].copy()
 
             # Efficiently merge attribute data from all rows for product-only case
@@ -136,20 +212,32 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
                         if pd.notna(attr_value) and str(attr_value).strip() != '':
                             result_row[attr_col] = attr_value
 
+            # Also merge SKU image data for product-only case
+            sku_image_columns = [col for col in group.columns if 'SKU画像' in col]
+            if sku_image_columns:
+                # Find first row with actual SKU image data
+                for _, row in group.iterrows():
+                    if pd.notna(row.get('SKU画像パス')) and str(row.get('SKU画像パス')).strip():
+                        for sku_col in sku_image_columns:
+                            sku_value = row.get(sku_col)
+                            if pd.notna(sku_value) and str(sku_value).strip():
+                                result_row[sku_col] = sku_value
+                        break
+
             if pd.isna(result_row['SKU管理番号']):
                 result_row['SKU管理番号'] = result_row['商品番号']
             yield result_row
 
         # If only variant info (shouldn't happen but handle it)
         elif len(variant_info) > 0:
-            if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-                logger.info(f"  {handle}: Using variant-only logic")
+            if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+                logger.info(f"  {derived_handle}: Using variant-only logic")
             for _, variant_row in variant_info.iterrows():
                 yield variant_row
 
     # Apply consolidation
     consolidated_rows = []
-    for handle, group in df.groupby('商品管理番号（商品URL）'):
+    for derived_handle, group in df.groupby('Derived_Handle'):
         group_rows_before = len(group)
         group_rows_after = 0
         for row in consolidate_group(group):
@@ -157,15 +245,15 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
             group_rows_after += 1
 
         # Debug logging for problematic products
-        if handle in ['maruzen-4set00', 'abshiri-r330-t']:
-            logger.info(f"Debug {handle}: {group_rows_before} → {group_rows_after} rows")
+        if derived_handle in ['maruzen-4set00', 'abshiri-r330-t', 'alishan-mu1000']:
+            logger.info(f"Debug {derived_handle}: {group_rows_before} → {group_rows_after} rows")
 
     df = pd.DataFrame(consolidated_rows).reset_index(drop=True)
     logger.info(f"Consolidated data: {len(df)} final rows")
 
-    # Process SKUs and generate handles
-    df['Handle'] = df['商品管理番号（商品URL）'].apply(config.derive_handle)
-    df['Variant SKU'] = df['SKU管理番号']
+    # Set Handle from derived handle and Variant SKU from SKU管理番号
+    df['Handle'] = df['商品管理番号（商品URL）']  # This is now the derived handle
+    df['Variant SKU'] = df['SKU管理番号']  # This is now the original handle (fixed)
 
     # Extract set count for variants
     df['Set Count'] = df['SKU管理番号'].apply(config.get_set_count)
@@ -267,6 +355,14 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     attribute_columns = [col for col in df.columns if '商品属性' in col]
     logger.info(f"Preserving {len(attribute_columns)} attribute columns for metafield mapping")
 
+    # Also preserve SKU image columns for Variant Image URL construction
+    sku_image_columns = [col for col in df.columns if 'SKU画像' in col]
+    logger.info(f"Preserving {len(sku_image_columns)} SKU image columns for URL construction")
+
+    # Preserve tax rate column for tax mapping in step 07
+    tax_columns = [col for col in df.columns if col == '消費税率']
+    logger.info(f"Preserving {len(tax_columns)} tax rate column for tax mapping: {tax_columns}")
+
     # Helper function to format numbers without decimals
     def format_number(value):
         """Format numeric values to remove unnecessary decimals"""
@@ -318,7 +414,10 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
         if type_str == 'CABINET':
             return f"https://tshop.r10s.jp/tsutsu-uraura/cabinet{path_str}"
         elif type_str == 'GOLD':
-            return f"https://tshop.r10s.jp/gold/tsutsu-uraura{path_str.lstrip('/')}"
+            # Keep slash if it exists, add if it doesn't
+            if not path_str.startswith('/'):
+                path_str = '/' + path_str
+            return f"https://tshop.r10s.jp/gold/tsutsu-uraura{path_str}"
         else:
             # Fallback to basic domain + path
             return f"https://tshop.r10s.jp/tsutsu-uraura{path_str.lstrip('/')}"
@@ -379,7 +478,7 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     shopify_df['Google Shopping / Custom Label 2'] = ''
     shopify_df['Google Shopping / Custom Label 3'] = ''
     shopify_df['Google Shopping / Custom Label 4'] = ''
-    shopify_df['Variant Image'] = df['SKU画像パス']
+    shopify_df['Variant Image'] = df.apply(lambda row: construct_image_url(row.get('SKU画像パス'), row.get('SKU画像タイプ')), axis=1)
     shopify_df['Variant Weight Unit'] = 'kg'
     shopify_df['Variant Tax Code'] = ''
     shopify_df['Cost per item'] = ''
@@ -390,6 +489,16 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
     if attribute_columns:
         attribute_df = df[attribute_columns].copy()
         shopify_df = pd.concat([shopify_df, attribute_df], axis=1)
+
+    # Preserve SKU image columns for URL construction
+    if sku_image_columns:
+        sku_image_df = df[sku_image_columns].copy()
+        shopify_df = pd.concat([shopify_df, sku_image_df], axis=1)
+
+    # Preserve tax rate column for tax mapping in step 07
+    if tax_columns:
+        tax_df = df[tax_columns].copy()
+        shopify_df = pd.concat([shopify_df, tax_df], axis=1)
 
     # Statistics
     total_products = len(shopify_df['Handle'].unique())

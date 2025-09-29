@@ -64,7 +64,7 @@ def execute(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def remove_extra_image_columns(df: pd.DataFrame, stats: Dict[str, Any]) -> pd.DataFrame:
     """
-    Remove extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20)
+    Remove extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20, SKU画像タイプ, SKU画像パス, SKU画像名（ALT）)
 
     Args:
         df: Dataframe to clean up
@@ -73,7 +73,7 @@ def remove_extra_image_columns(df: pd.DataFrame, stats: Dict[str, Any]) -> pd.Da
     Returns:
         Dataframe with extra image columns removed
     """
-    logger.info("Removing extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20)...")
+    logger.info("Removing extra image columns (Image Src 2-20, Image Alt Text 2-20, Image Position 2-20, SKU画像タイプ, SKU画像パス, SKU画像名（ALT）)...")
 
     columns_to_remove = []
 
@@ -89,6 +89,12 @@ def remove_extra_image_columns(df: pd.DataFrame, stats: Dict[str, Any]) -> pd.Da
             columns_to_remove.append(img_alt_col)
         if img_pos_col in df.columns:
             columns_to_remove.append(img_pos_col)
+
+    # Find SKU image columns
+    sku_image_columns = ['SKU画像タイプ', 'SKU画像パス', 'SKU画像名（ALT）']
+    for col in sku_image_columns:
+        if col in df.columns:
+            columns_to_remove.append(col)
 
     if columns_to_remove:
         logger.info(f"Removing {len(columns_to_remove)} extra image columns: {columns_to_remove[:5]}{'...' if len(columns_to_remove) > 5 else ''}")
