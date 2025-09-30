@@ -31,7 +31,8 @@ from rakuten_to_shopify.pipeline.steps import (
     step_05_metafield_mapping,
     step_06_image_restructuring,
     step_07_tax_mapping,
-    step_08_data_cleanup
+    step_08_data_cleanup,
+    step_09_variant_image_separation
 )
 
 
@@ -44,7 +45,8 @@ STEPS = {
     '05': ('Metafield Mapping', step_05_metafield_mapping),
     '06': ('Image Restructuring', step_06_image_restructuring),
     '07': ('Tax Mapping', step_07_tax_mapping),
-    '08': ('Data Cleanup', step_08_data_cleanup)
+    '08': ('Data Cleanup', step_08_data_cleanup),
+    '09': ('Variant Image Separation', step_09_variant_image_separation)
 }
 
 
@@ -210,8 +212,15 @@ def load_step_data(step_number: str, input_file: str, output_dir: Path) -> dict:
             import pandas as pd
             df = pd.read_csv(input_file, encoding='utf-8')
             # For step 02, provide as cleaned_df (output from step 01)
+            # For step 09, provide as cleaned_df (needs to process variant images)
             # For other steps, use appropriate key based on step
             if step_number == '02':
+                return {
+                    'cleaned_df': df,
+                    'output_dir': output_dir,
+                    'config': PipelineConfig()
+                }
+            elif step_number == '09':
                 return {
                     'cleaned_df': df,
                     'output_dir': output_dir,
@@ -227,7 +236,33 @@ def load_step_data(step_number: str, input_file: str, output_dir: Path) -> dict:
             # Load pickle data
             import pickle
             with open(input_file, 'rb') as f:
-                return pickle.load(f)
+                data = pickle.load(f)
+
+            # Special handling for step 09 - ensure it has cleaned_df with Handle column
+            if step_number == '09':
+                # Step 9 needs cleaned_df with Handle column, check if current cleaned_df has it
+                needs_replacement = True
+                if 'cleaned_df' in data and data['cleaned_df'] is not None:
+                    if hasattr(data['cleaned_df'], 'columns') and 'Handle' in data['cleaned_df'].columns:
+                        needs_replacement = False
+                        print(f"🔄 Existing cleaned_df has Handle column, using as-is for step 09")
+
+                if needs_replacement:
+                    print(f"🔄 Need to find DataFrame with Handle column for step 09")
+                    # Try to find a DataFrame with 'Handle' column for step 9
+                    df_candidates = ['final_df', 'tax_mapped_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df']
+                    found_suitable_df = False
+                    for key in df_candidates:
+                        if key in data and data[key] is not None and hasattr(data[key], 'columns') and 'Handle' in data[key].columns:
+                            data['cleaned_df'] = data[key]
+                            print(f"🔄 Using {key} as cleaned_df for step 09")
+                            found_suitable_df = True
+                            break
+
+                    if not found_suitable_df:
+                        raise ValueError(f"No suitable DataFrame with 'Handle' column found for step 09")
+
+            return data
         else:
             raise ValueError(f"Unsupported file format: {input_file}")
 
@@ -280,6 +315,9 @@ def save_step_data(step_number: str, data: dict, output_dir: Path):
     elif step_number == '08':
         # Step 8 (data cleanup) should prioritize tax_mapped_df to preserve tax data
         priority_keys = ['final_df', 'tax_mapped_df', 'cleaned_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']
+    elif step_number == '09':
+        # Step 9 (variant image separation) should prioritize cleaned_df with corrected images over original final_df
+        priority_keys = ['cleaned_df', 'final_df', 'tax_mapped_df', 'image_restructured_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']
     else:
         # Default priority
         priority_keys = ['final_df', 'image_restructured_df', 'tax_mapped_df', 'cleaned_df', 'metafield_mapped_df', 'html_processed_df', 'image_processed_df', 'sku_processed_df', 'shopify_df', 'raw_df']

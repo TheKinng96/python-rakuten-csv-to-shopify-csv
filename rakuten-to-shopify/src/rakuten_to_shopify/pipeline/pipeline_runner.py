@@ -23,7 +23,8 @@ from .steps import (
     step_05_metafield_mapping,
     step_06_image_restructuring,
     step_07_tax_mapping,
-    step_08_data_cleanup
+    step_08_data_cleanup,
+    step_09_variant_image_separation
 )
 
 
@@ -88,7 +89,8 @@ class PipelineRunner:
                 ("05", "Metafield Mapping", step_05_metafield_mapping),
                 ("06", "Image Restructuring", step_06_image_restructuring),
                 ("07", "Tax Mapping", step_07_tax_mapping),
-                ("08", "Data Cleanup", step_08_data_cleanup)
+                ("08", "Data Cleanup", step_08_data_cleanup),
+                ("09", "Variant Image Separation", step_09_variant_image_separation)
             ]
 
             for step_num, step_name, step_func in steps:

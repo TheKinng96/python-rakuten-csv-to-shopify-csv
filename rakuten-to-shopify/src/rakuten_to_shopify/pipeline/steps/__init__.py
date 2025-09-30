@@ -14,7 +14,8 @@ from . import (
     step_05_metafield_mapping,
     step_06_image_restructuring,
     step_07_tax_mapping,
-    step_08_data_cleanup
+    step_08_data_cleanup,
+    step_09_variant_image_separation
 )
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     'step_05_metafield_mapping',
     'step_06_image_restructuring',
     'step_07_tax_mapping',
-    'step_08_data_cleanup'
+    'step_08_data_cleanup',
+    'step_09_variant_image_separation'
 ]
